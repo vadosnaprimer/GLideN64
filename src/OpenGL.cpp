@@ -318,10 +318,10 @@ void OGLVideo::readScreen2(void * _dest, int * _width, int * _height, int _front
 
 	if (_dest == nullptr)
 		return;
-
+	/*
 	u8 *pBufferData = (u8*)malloc((*_width)*(*_height) * 4);
 	u8 *pDest = (u8*)_dest;
-
+	*/
 #ifndef GLES2
 	GLint oldMode;
 	glGetIntegerv(GL_READ_BUFFER, &oldMode);
@@ -329,12 +329,12 @@ void OGLVideo::readScreen2(void * _dest, int * _width, int * _height, int _front
 		glReadBuffer(GL_FRONT);
 	else
 		glReadBuffer(GL_BACK);
-	glReadPixels(0, m_heightOffset, m_screenWidth, m_screenHeight, GL_RGBA, GL_UNSIGNED_BYTE, pBufferData);
+	glReadPixels(0, m_heightOffset, m_screenWidth, m_screenHeight, GL_BGRA, GL_UNSIGNED_BYTE, _dest);
 	glReadBuffer(oldMode);
 #else
 	glReadPixels(0, m_heightOffset, m_screenWidth, m_screenHeight, GL_RGBA, GL_UNSIGNED_BYTE, pBufferData);
 #endif
-
+	/*
 	//Convert RGBA to RGB
 	for (u32 y = 0; y < *_height; ++y) {
 		u8 *ptr = pBufferData + ((*_width) * 4 * y);
@@ -348,6 +348,7 @@ void OGLVideo::readScreen2(void * _dest, int * _width, int * _height, int _front
 	}
 
 	free(pBufferData);
+	*/
 }
 
 /*---------------OGLRender::TexrectDrawer-------------*/

@@ -13,8 +13,6 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libGLideNHQ", "libGLideNHQ.
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "osal", "osal.vcxproj", "{7BF6F100-31DB-44AE-A2A5-5DDEED9A909C}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "GLideNUI", "..\..\src\GLideNUI\GLideNUI.vcxproj", "{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug_mupenplus_uniformset|Win32 = Debug_mupenplus_uniformset|Win32
@@ -89,8 +87,8 @@ Global
 		{DA965BCF-2219-47AF-ACE7-EAF76D5D4756}.Release_dll|x64.Build.0 = Release_dll|x64
 		{DA965BCF-2219-47AF-ACE7-EAF76D5D4756}.Release_mupenplus|Win32.ActiveCfg = Release|Win32
 		{DA965BCF-2219-47AF-ACE7-EAF76D5D4756}.Release_mupenplus|Win32.Build.0 = Release|Win32
-		{DA965BCF-2219-47AF-ACE7-EAF76D5D4756}.Release_mupenplus|x64.ActiveCfg = Release_dll|x64
-		{DA965BCF-2219-47AF-ACE7-EAF76D5D4756}.Release_mupenplus|x64.Build.0 = Release_dll|x64
+		{DA965BCF-2219-47AF-ACE7-EAF76D5D4756}.Release_mupenplus|x64.ActiveCfg = Release|x64
+		{DA965BCF-2219-47AF-ACE7-EAF76D5D4756}.Release_mupenplus|x64.Build.0 = Release|x64
 		{DA965BCF-2219-47AF-ACE7-EAF76D5D4756}.Release|Win32.ActiveCfg = Release|Win32
 		{DA965BCF-2219-47AF-ACE7-EAF76D5D4756}.Release|Win32.Build.0 = Release|Win32
 		{DA965BCF-2219-47AF-ACE7-EAF76D5D4756}.Release|x64.ActiveCfg = Release|x64
@@ -131,37 +129,6 @@ Global
 		{7BF6F100-31DB-44AE-A2A5-5DDEED9A909C}.RelWithDebInfo|Win32.Build.0 = Release|Win32
 		{7BF6F100-31DB-44AE-A2A5-5DDEED9A909C}.RelWithDebInfo|x64.ActiveCfg = Release|x64
 		{7BF6F100-31DB-44AE-A2A5-5DDEED9A909C}.RelWithDebInfo|x64.Build.0 = Release|x64
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Debug_mupenplus_uniformset|Win32.ActiveCfg = Debug|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Debug_mupenplus_uniformset|Win32.Build.0 = Debug|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Debug_mupenplus_uniformset|x64.ActiveCfg = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Debug_mupenplus_uniformset|x64.Build.0 = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Debug_mupenplus|Win32.ActiveCfg = Debug|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Debug_mupenplus|Win32.Build.0 = Debug|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Debug_mupenplus|x64.ActiveCfg = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Debug_mupenplus|x64.Build.0 = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Debug|Win32.ActiveCfg = Debug|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Debug|Win32.Build.0 = Debug|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Debug|x64.ActiveCfg = Debug|x64
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Debug|x64.Build.0 = Debug|x64
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.MinSizeRel|Win32.ActiveCfg = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.MinSizeRel|Win32.Build.0 = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.MinSizeRel|x64.ActiveCfg = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.MinSizeRel|x64.Build.0 = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Release_dll|Win32.ActiveCfg = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Release_dll|Win32.Build.0 = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Release_dll|x64.ActiveCfg = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Release_dll|x64.Build.0 = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Release_mupenplus|Win32.ActiveCfg = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Release_mupenplus|Win32.Build.0 = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Release_mupenplus|x64.ActiveCfg = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Release_mupenplus|x64.Build.0 = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Release|Win32.ActiveCfg = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Release|Win32.Build.0 = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.Release|x64.ActiveCfg = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.RelWithDebInfo|Win32.ActiveCfg = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.RelWithDebInfo|Win32.Build.0 = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.RelWithDebInfo|x64.ActiveCfg = Release|Win32
-		{37CAB375-A7A6-3CAB-BD56-0E954D3FD2FE}.RelWithDebInfo|x64.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

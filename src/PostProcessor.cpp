@@ -4,9 +4,21 @@
 #include "gSP.h"
 #include "PostProcessor.h"
 #include "FrameBuffer.h"
-#include "GLSLCombiner.h"
-#include "ShaderUtils.h"
 #include "Config.h"
+
+#include <Graphics/Context.h>
+#include <Graphics/Parameters.h>
+#include "DisplayWindow.h"
+
+using namespace graphics;
+
+#define NEW_POST_PROCESSOR
+
+#ifdef OS_ANDROID
+PostProcessor PostProcessor::processor;
+#endif
+
+#ifdef USE_OLD_SHADERS
 
 #if defined(GLES3_1)
 #define SHADER_VERSION "#version 310 es \n"
@@ -24,26 +36,30 @@
 #define FRAGMENT_SHADER_END "\n"
 #endif
 
-#ifdef ANDROID
-PostProcessor PostProcessor::processor;
-#endif
-
 static const char * vertexShader =
 SHADER_VERSION
-"#if (__VERSION__ > 120)						\n"
-"# define IN in									\n"
-"# define OUT out								\n"
-"#else											\n"
-"# define IN attribute							\n"
-"# define OUT varying							\n"
-"#endif // __VERSION							\n"
-"IN highp vec2 aPosition;								\n"
-"IN highp vec2 aTexCoord;								\n"
-"OUT mediump vec2 vTexCoord;							\n"
-"void main(){                                           \n"
-"gl_Position = vec4(aPosition.x, aPosition.y, 0.0, 1.0);\n"
-"vTexCoord = aTexCoord;                                 \n"
-"}                                                      \n"
+"#if (__VERSION__ > 120)		\n"
+"# define IN in					\n"
+"# define OUT out				\n"
+"#else							\n"
+"# define IN attribute			\n"
+"# define OUT varying			\n"
+"#endif // __VERSION			\n"
+#ifndef NEW_POST_PROCESSOR
+"IN highp vec2 aRectPosition;	\n"
+#else
+"IN highp vec4 aRectPosition;						\n"
+#endif
+"IN highp vec2 aTexCoord0;		\n"
+"OUT mediump vec2 vTexCoord;	\n"
+"void main() {					\n"
+#ifndef NEW_POST_PROCESSOR
+"gl_Position = vec4(aRectPosition.x, aRectPosition.y, 0.0, 1.0);\n"
+#else
+"  gl_Position = aRectPosition;						\n"
+#endif
+"vTexCoord = aTexCoord0;		\n"
+"}								\n"
 ;
 
 static const char* extractBloomShader =
@@ -219,57 +235,25 @@ FRAGMENT_SHADER_END
 "}																														\n"
 ;
 
-static const char* gammaCorrectionShader =
-SHADER_VERSION
-"#if (__VERSION__ > 120)													\n"
-"# define IN in																\n"
-"# define OUT out															\n"
-"# define texture2D texture													\n"
-"#else																		\n"
-"# define IN varying														\n"
-"# define OUT																\n"
-"#endif // __VERSION __														\n"
-"IN mediump vec2 vTexCoord;													\n"
-"uniform sampler2D Sample0;													\n"
-"uniform lowp float uGammaCorrectionLevel;									\n"
-"OUT lowp vec4 fragColor;													\n"
-"																			\n"
-"void main()																\n"
-"{																			\n"
-"    fragColor = texture2D(Sample0, vTexCoord);								\n"
-"    fragColor.rgb = pow(fragColor.rgb, vec3(1.0 / uGammaCorrectionLevel));	\n"
-FRAGMENT_SHADER_END
-"}																			\n"
-;
+#endif
 
-static
-GLuint _createShaderProgram(const char * _strVertex, const char * _strFragment)
+PostProcessor::PostProcessor()
+	: m_FBO_glowMap(0)
+	, m_FBO_blur(0)
+	, m_pTextureOriginal(nullptr)
+	, m_pTextureGlowMap(nullptr)
+	, m_pTextureBlur(nullptr)
+{}
+
+void PostProcessor::_createResultBuffer(const FrameBuffer * _pMainBuffer)
 {
-	GLuint vertex_shader_object = glCreateShader(GL_VERTEX_SHADER);
-	glShaderSource(vertex_shader_object, 1, &_strVertex, nullptr);
-	glCompileShader(vertex_shader_object);
-	assert(checkShaderCompileStatus(vertex_shader_object));
+	m_pResultBuffer.reset(new FrameBuffer());
+	m_pResultBuffer->m_width = _pMainBuffer->m_width;
+	m_pResultBuffer->m_height = _pMainBuffer->m_height;
+	m_pResultBuffer->m_scale = _pMainBuffer->m_scale;
 
-	GLuint fragment_shader_object = glCreateShader(GL_FRAGMENT_SHADER);
-	glShaderSource(fragment_shader_object, 1, &_strFragment, nullptr);
-	glCompileShader(fragment_shader_object);
-	assert(checkShaderCompileStatus(fragment_shader_object));
-
-	GLuint program = glCreateProgram();
-	glBindAttribLocation(program, SC_POSITION, "aPosition");
-	glBindAttribLocation(program, SC_TEXCOORD0, "aTexCoord");
-	glAttachShader(program, vertex_shader_object);
-	glAttachShader(program, fragment_shader_object);
-	glLinkProgram(program);
-	glDeleteShader(vertex_shader_object);
-	glDeleteShader(fragment_shader_object);
-	assert(checkProgramLinkStatus(program));
-	return program;
-}
-
-static
-void _initTexture(CachedTexture * pTexture)
-{
+	const CachedTexture * pMainTexture = _pMainBuffer->m_pTexture;
+	CachedTexture * pTexture = m_pResultBuffer->m_pTexture;
 	pTexture->format = G_IM_FMT_RGBA;
 	pTexture->clampS = 1;
 	pTexture->clampT = 1;
@@ -278,83 +262,46 @@ void _initTexture(CachedTexture * pTexture)
 	pTexture->maskT = 0;
 	pTexture->mirrorS = 0;
 	pTexture->mirrorT = 0;
-	pTexture->realWidth = video().getWidth();
-	pTexture->realHeight = video().getHeight();
+	pTexture->realWidth = pMainTexture->realWidth;
+	pTexture->realHeight = pMainTexture->realHeight;
 	pTexture->textureBytes = pTexture->realWidth * pTexture->realHeight * 4;
 	textureCache().addFrameBufferTextureSize(pTexture->textureBytes);
-	glBindTexture(GL_TEXTURE_2D, pTexture->glName);
 
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, pTexture->realWidth, pTexture->realHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glBindTexture(GL_TEXTURE_2D, 0);
-}
+	Context::InitTextureParams initParams;
+	initParams.handle = pTexture->name;
+	initParams.width = pTexture->realWidth;
+	initParams.height = pTexture->realHeight;
+	initParams.internalFormat = gfxContext.convertInternalTextureFormat(u32(internalcolorFormat::RGBA8));
+	initParams.format = colorFormat::RGBA;
+	initParams.dataType = datatype::UNSIGNED_BYTE;
+	gfxContext.init2DTexture(initParams);
 
-static
-CachedTexture * _createTexture()
-{
-	CachedTexture * pTexture = textureCache().addFrameBufferTexture();
-	_initTexture(pTexture);
-	return pTexture;
-}
+	Context::TexParameters setParams;
+	setParams.handle = pTexture->name;
+	setParams.target = textureTarget::TEXTURE_2D;
+	setParams.minFilter = textureParameters::FILTER_NEAREST;
+	setParams.magFilter = textureParameters::FILTER_NEAREST;
+	gfxContext.setTextureParameters(setParams);
 
-static
-void _initFBO(GLuint _FBO, CachedTexture * _pTexture)
-{
-	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, _FBO);
-	glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _pTexture->glName, 0);
-	assert(checkFBO());
-}
-
-static
-GLuint _createFBO(CachedTexture * _pTexture)
-{
-	GLuint FBO;
-	glGenFramebuffers(1, &FBO);
-	_initFBO(FBO, _pTexture);
-	return FBO;
-}
-
-PostProcessor::PostProcessor()
-	: m_extractBloomProgram(0)
-	, m_seperableBlurProgram(0)
-	, m_glowProgram(0)
-	, m_bloomProgram(0)
-	, m_gammaCorrectionProgram(0)
-	, m_pResultBuffer(nullptr)
-	, m_FBO_glowMap(0)
-	, m_FBO_blur(0)
-	, m_pTextureOriginal(nullptr)
-	, m_pTextureGlowMap(nullptr)
-	, m_pTextureBlur(nullptr)
-{}
-
-void PostProcessor::_initCommon()
-{
-	m_pResultBuffer = new FrameBuffer();
-	_initTexture(m_pResultBuffer->m_pTexture);
-	_initFBO(m_pResultBuffer->m_FBO, m_pResultBuffer->m_pTexture);
-
-	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+	Context::FrameBufferRenderTarget bufTarget;
+	bufTarget.bufferHandle = m_pResultBuffer->m_FBO;
+	bufTarget.bufferTarget = bufferTarget::DRAW_FRAMEBUFFER;
+	bufTarget.attachment = bufferAttachment::COLOR_ATTACHMENT0;
+	bufTarget.textureTarget = textureTarget::TEXTURE_2D;
+	bufTarget.textureHandle = pTexture->name;
+	gfxContext.addFrameBufferRenderTarget(bufTarget);
+	assert(!gfxContext.isFramebufferError());
 }
 
 void PostProcessor::_initGammaCorrection()
 {
-	m_gammaCorrectionProgram = _createShaderProgram(vertexShader, gammaCorrectionShader);
-	glUseProgram(m_gammaCorrectionProgram);
-	int loc = glGetUniformLocation(m_gammaCorrectionProgram, "Sample0");
-	assert(loc >= 0);
-	glUniform1i(loc, 0);
-	loc = glGetUniformLocation(m_gammaCorrectionProgram, "uGammaCorrectionLevel");
-	assert(loc >= 0);
-	const f32 gammaLevel = (config.gammaCorrection.force != 0) ? config.gammaCorrection.level : 2.0f;
-	glUniform1f(loc, gammaLevel);
-	glUseProgram(0);
+	m_gammaCorrectionProgram.reset(gfxContext.createGammaCorrectionShader());
 }
 
 void PostProcessor::_initBlur()
 {
-	m_extractBloomProgram = _createShaderProgram(vertexShader, extractBloomShader);
+	/*
+	m_extractBloomProgram = createRectShaderProgram(vertexShader, extractBloomShader);
 	glUseProgram(m_extractBloomProgram);
 	int loc = glGetUniformLocation(m_extractBloomProgram, "Sample0");
 	assert(loc >= 0);
@@ -363,14 +310,14 @@ void PostProcessor::_initBlur()
 	assert(loc >= 0);
 	glUniform1i(loc, config.bloomFilter.thresholdLevel);
 
-	m_seperableBlurProgram = _createShaderProgram(vertexShader, seperableBlurShader);
+	m_seperableBlurProgram = createRectShaderProgram(vertexShader, seperableBlurShader);
 	glUseProgram(m_seperableBlurProgram);
 	loc = glGetUniformLocation(m_seperableBlurProgram, "Sample0");
 	assert(loc >= 0);
 	glUniform1i(loc, 0);
 	loc = glGetUniformLocation(m_seperableBlurProgram, "TexelSize");
 	assert(loc >= 0);
-	glUniform2f(loc, 1.0f / video().getWidth(), 1.0f / video().getHeight());
+	glUniform2f(loc, 1.0f / dwnd().getWidth(), 1.0f / dwnd().getHeight());
 	loc = glGetUniformLocation(m_seperableBlurProgram, "Orientation");
 	assert(loc >= 0);
 	glUniform1i(loc, 0);
@@ -384,7 +331,7 @@ void PostProcessor::_initBlur()
 	assert(loc >= 0);
 	glUniform1f(loc, config.bloomFilter.blurStrength/100.0f);
 
-	m_glowProgram = _createShaderProgram(vertexShader, glowShader);
+	m_glowProgram = createRectShaderProgram(vertexShader, glowShader);
 	glUseProgram(m_glowProgram);
 	loc = glGetUniformLocation(m_glowProgram, "Sample0");
 	assert(loc >= 0);
@@ -403,33 +350,36 @@ void PostProcessor::_initBlur()
 	m_FBO_blur = _createFBO(m_pTextureBlur);
 
 	glUseProgram(0);
+	*/
+}
+
+void PostProcessor::_initOrientationCorrection()
+{
+	m_orientationCorrectionProgram.reset(gfxContext.createOrientationCorrectionShader());
 }
 
 void PostProcessor::init()
 {
-	_initCommon();
 	_initGammaCorrection();
+	if (config.generalEmulation.enableBlitScreenWorkaround != 0)
+		_initOrientationCorrection();
 	if (config.bloomFilter.enable != 0)
 		_initBlur();
 }
 
-void PostProcessor::_destroyCommon()
-{
-	delete m_pResultBuffer;
-	m_pResultBuffer = nullptr;
-
-	m_pTextureOriginal = nullptr;
-}
-
 void PostProcessor::_destroyGammaCorrection()
 {
-	if (m_gammaCorrectionProgram != 0)
-		glDeleteProgram(m_gammaCorrectionProgram);
-	m_gammaCorrectionProgram = 0;
+	m_gammaCorrectionProgram.reset();
+}
+
+void PostProcessor::_destroyOrientationCorrection()
+{
+	m_orientationCorrectionProgram.reset();
 }
 
 void PostProcessor::_destroyBlur()
 {
+	/*
 	if (m_extractBloomProgram != 0)
 		glDeleteProgram(m_extractBloomProgram);
 	m_extractBloomProgram = 0;
@@ -461,6 +411,7 @@ void PostProcessor::_destroyBlur()
 	if (m_pTextureBlur != nullptr)
 		textureCache().removeFrameBufferTexture(m_pTextureBlur);
 	m_pTextureBlur = nullptr;
+	*/
 }
 
 
@@ -468,74 +419,45 @@ void PostProcessor::destroy()
 {
 	_destroyBlur();
 	_destroyGammaCorrection();
-	_destroyCommon();
+	_destroyOrientationCorrection();
+	m_pResultBuffer.reset();
 }
 
 PostProcessor & PostProcessor::get()
 {
-#ifndef ANDROID
+#ifndef OS_ANDROID
 	static PostProcessor processor;
 #endif
 	return processor;
 }
 
-void PostProcessor::_setGLState() {
-	glDisable(GL_DEPTH_TEST);
-	glDisable(GL_BLEND);
-
-	static const float vert[] =
-	{
-		-1.0, -1.0, +0.0, +0.0,
-		+1.0, -1.0, +1.0, +0.0,
-		-1.0, +1.0, +0.0, +1.0,
-		+1.0, +1.0, +1.0, +1.0
-	};
-
-	glEnableVertexAttribArray(SC_POSITION);
-	glVertexAttribPointer(SC_POSITION, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (float*)vert);
-	glEnableVertexAttribArray(SC_TEXCOORD0);
-	glVertexAttribPointer(SC_TEXCOORD0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (float*)vert + 2);
-	glDisableVertexAttribArray(SC_COLOR);
-	glDisableVertexAttribArray(SC_TEXCOORD1);
-	glDisableVertexAttribArray(SC_NUMLIGHTS);
-	glDisableVertexAttribArray(SC_MODIFY);
-	glViewport(0, 0, video().getWidth(), video().getHeight());
-	glScissor(0, 0, m_pResultBuffer->m_pTexture->realWidth, m_pResultBuffer->m_pTexture->realHeight);
-	gSP.changed |= CHANGED_VIEWPORT;
-	gDP.changed |= CHANGED_RENDERMODE | CHANGED_SCISSOR;
-}
-
 void PostProcessor::_preDraw(FrameBuffer * _pBuffer)
 {
-	_setGLState();
-	OGLVideo & ogl = video();
+	if (!m_pResultBuffer || m_pResultBuffer->m_width != _pBuffer->m_width)
+		_createResultBuffer(_pBuffer);
 
-	m_pResultBuffer->m_width = _pBuffer->m_width;
-	m_pResultBuffer->m_height = _pBuffer->m_height;
-	m_pResultBuffer->m_scaleX = ogl.getScaleX();
-	m_pResultBuffer->m_scaleY = ogl.getScaleY();
-#ifdef GLES2
-	m_pTextureOriginal = _pBuffer->m_pTexture;
-#else
 	if (_pBuffer->m_pTexture->frameBufferTexture == CachedTexture::fbMultiSample) {
 		_pBuffer->resolveMultisampledTexture(true);
 		m_pTextureOriginal = _pBuffer->m_pResolveTexture;
 	} else
 		m_pTextureOriginal = _pBuffer->m_pTexture;
-#endif
 
-	glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+	gfxContext.bindFramebuffer(bufferTarget::READ_FRAMEBUFFER,
+		ObjectHandle::null);
 }
 
 void PostProcessor::_postDraw()
 {
-	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-	video().getRender().dropRenderState();
-	glUseProgram(0);
+	gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER,
+		ObjectHandle::null);
+
+	gfxContext.resetShaderProgram();
 }
 
 FrameBuffer * PostProcessor::doBlur(FrameBuffer * _pBuffer)
 {
+	return _pBuffer;
+	/*
 	if (_pBuffer == nullptr)
 		return nullptr;
 
@@ -544,6 +466,7 @@ FrameBuffer * PostProcessor::doBlur(FrameBuffer * _pBuffer)
 
 	_preDraw(_pBuffer);
 
+#ifndef NEW_POST_PROCESSOR
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_FBO_glowMap);
 	textureCache().activateTexture(0, m_pTextureOriginal);
 	glUseProgram(m_extractBloomProgram);
@@ -567,9 +490,46 @@ FrameBuffer * PostProcessor::doBlur(FrameBuffer * _pBuffer)
 	textureCache().activateTexture(1, m_pTextureGlowMap);
 	glUseProgram(m_glowProgram);
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+#else
+	CachedTexture * pDstTex = m_pResultBuffer->m_pTexture;
+
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_FBO_glowMap);
+	video().getRender().copyTexturedRect(0, 0, m_pTextureOriginal->realWidth, m_pTextureOriginal->realHeight,
+		m_pTextureOriginal->realWidth, m_pTextureOriginal->realHeight, m_pTextureOriginal->glName,
+		0, 0, m_pTextureGlowMap->realWidth, m_pTextureGlowMap->realHeight,
+		m_pTextureGlowMap->realWidth, m_pTextureGlowMap->realHeight, GL_NEAREST, m_extractBloomProgram);
+
+	glUseProgram(m_seperableBlurProgram);
+	int loc = glGetUniformLocation(m_seperableBlurProgram, "Orientation");
+	assert(loc >= 0);
+	glUniform1i(loc, 0);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_FBO_blur);
+	video().getRender().copyTexturedRect(0, 0, m_pTextureGlowMap->realWidth, m_pTextureGlowMap->realHeight,
+		m_pTextureGlowMap->realWidth, m_pTextureGlowMap->realHeight, m_pTextureGlowMap->glName,
+		0, 0, m_pTextureBlur->realWidth, m_pTextureBlur->realHeight,
+		m_pTextureBlur->realWidth, m_pTextureBlur->realHeight, GL_NEAREST, m_seperableBlurProgram);
+
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_FBO_glowMap);
+	glUniform1i(loc, 1);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_FBO_blur);
+	video().getRender().copyTexturedRect(0, 0, m_pTextureBlur->realWidth, m_pTextureBlur->realHeight,
+		m_pTextureBlur->realWidth, m_pTextureBlur->realHeight, m_pTextureBlur->glName,
+		0, 0, m_pTextureGlowMap->realWidth, m_pTextureGlowMap->realHeight,
+		m_pTextureGlowMap->realWidth, m_pTextureGlowMap->realHeight, GL_NEAREST, m_seperableBlurProgram);
+
+
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_pResultBuffer->m_FBO);
+	textureCache().activateTexture(1, m_pTextureGlowMap);
+	video().getRender().copyTexturedRect(0, 0, m_pTextureGlowMap->realWidth, m_pTextureGlowMap->realHeight,
+		m_pTextureGlowMap->realWidth, m_pTextureGlowMap->realHeight, m_pTextureOriginal->glName,
+		0, 0, m_pTextureOriginal->realWidth, m_pTextureOriginal->realHeight,
+		m_pTextureOriginal->realWidth, m_pTextureOriginal->realHeight, GL_NEAREST, m_glowProgram);
+
+#endif
 
 	_postDraw();
 	return m_pResultBuffer;
+	*/
 }
 
 FrameBuffer * PostProcessor::doGammaCorrection(FrameBuffer * _pBuffer)
@@ -580,14 +540,71 @@ FrameBuffer * PostProcessor::doGammaCorrection(FrameBuffer * _pBuffer)
 	if (((*REG.VI_STATUS & 8) | config.gammaCorrection.force) == 0)
 		return _pBuffer;
 
+	_preDraw(_pBuffer);
+
+	gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER,
+		ObjectHandle(m_pResultBuffer->m_FBO));
+
+	CachedTexture * pDstTex = m_pResultBuffer->m_pTexture;
+	GraphicsDrawer::CopyRectParams copyParams;
+	copyParams.srcX0 = 0;
+	copyParams.srcY0 = 0;
+	copyParams.srcX1 = m_pTextureOriginal->realWidth;
+	copyParams.srcY1 = m_pTextureOriginal->realHeight;
+	copyParams.srcWidth = m_pTextureOriginal->realWidth;
+	copyParams.srcHeight = m_pTextureOriginal->realHeight;
+	copyParams.dstX0 = 0;
+	copyParams.dstY0 = 0;
+	copyParams.dstX1 = pDstTex->realWidth;
+	copyParams.dstY1 = pDstTex->realHeight;
+	copyParams.dstHeight = pDstTex->realHeight;
+	copyParams.dstWidth = pDstTex->realWidth;
+	copyParams.dstHeight = pDstTex->realHeight;
+	copyParams.tex[0] = m_pTextureOriginal;
+	copyParams.filter = textureParameters::FILTER_NEAREST;
+	copyParams.combiner = m_gammaCorrectionProgram.get();
+
+	dwnd().getDrawer().copyTexturedRect(copyParams);
+
+	_postDraw();
+	return m_pResultBuffer.get();
+}
+
+FrameBuffer * PostProcessor::doOrientationCorrection(FrameBuffer * _pBuffer)
+{
+	if (_pBuffer == nullptr)
+		return nullptr;
+
+	if (config.generalEmulation.enableBlitScreenWorkaround == 0)
+		return _pBuffer;
 
 	_preDraw(_pBuffer);
 
-	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_pResultBuffer->m_FBO);
-	textureCache().activateTexture(0, m_pTextureOriginal);
-	glUseProgram(m_gammaCorrectionProgram);
-	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+	gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER,
+		ObjectHandle(m_pResultBuffer->m_FBO));
+
+	CachedTexture * pDstTex = m_pResultBuffer->m_pTexture;
+	GraphicsDrawer::CopyRectParams copyParams;
+	copyParams.srcX0 = 0;
+	copyParams.srcY0 = 0;
+	copyParams.srcX1 = m_pTextureOriginal->realWidth;
+	copyParams.srcY1 = m_pTextureOriginal->realHeight;
+	copyParams.srcWidth = m_pTextureOriginal->realWidth;
+	copyParams.srcHeight = m_pTextureOriginal->realHeight;
+	copyParams.dstX0 = 0;
+	copyParams.dstY0 = 0;
+	copyParams.dstX1 = pDstTex->realWidth;
+	copyParams.dstY1 = pDstTex->realHeight;
+	copyParams.dstHeight = pDstTex->realHeight;
+	copyParams.dstWidth = pDstTex->realWidth;
+	copyParams.dstHeight = pDstTex->realHeight;
+	copyParams.tex[0] = m_pTextureOriginal;
+	copyParams.filter = textureParameters::FILTER_NEAREST;
+	copyParams.combiner = m_orientationCorrectionProgram.get();
+
+	dwnd().getDrawer().copyTexturedRect(copyParams);
 
 	_postDraw();
-	return m_pResultBuffer;
+	return m_pResultBuffer.get();
 }

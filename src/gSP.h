@@ -7,22 +7,21 @@
 
 #define CHANGED_VIEWPORT		0x01
 #define CHANGED_MATRIX			0x02
+#define CHANGED_TEXTURE			0x04
 #define CHANGED_GEOMETRYMODE	0x08
-#define CHANGED_TEXTURE			0x10
-#define CHANGED_FOGPOSITION		0x20
-#define CHANGED_LIGHT			0x40
+#define CHANGED_FOGPOSITION		0x10
+#define CHANGED_LIGHT			0x20
+#define CHANGED_LOOKAT			0x40
 #define CHANGED_TEXTURESCALE	0x80
+#define CHANGED_HW_LIGHT		0x100
 
 #define CLIP_X      0x03
 #define CLIP_NEGX   0x01
 #define CLIP_POSX   0x02
-
 #define CLIP_Y      0x0C
 #define CLIP_NEGY   0x04
 #define CLIP_POSY   0x08
-
 #define CLIP_W      0x10
-
 #define CLIP_ALL	0x1F // CLIP_NEGX|CLIP_POSX|CLIP_NEGY|CLIP_POSY|CLIP_W
 
 #define MODIFY_XY	0x000000FF
@@ -31,12 +30,8 @@
 #define MODIFY_RGBA	0xFF000000
 #define MODIFY_ALL	0xFFFFFFFF
 
-#define SC_POSITION             1
-#define SC_COLOR                2
-#define SC_TEXCOORD0            3
-#define SC_TEXCOORD1            4
-#define SC_NUMLIGHTS            5
-#define SC_MODIFY               6
+enum Component { R, G, B };
+enum Axis { X ,Y, Z, W };
 
 struct SPVertex
 {
@@ -49,14 +44,6 @@ struct SPVertex
 	u8 HWLight;
 	u8 clip;
 	s16 flag;
-};
-
-struct SPLight
-{
-	f32 r, g, b;
-	f32 x, y, z;
-	f32 posx, posy, posz, posw;
-	f32 ca, la, qa;
 };
 
 struct gSPInfo
@@ -83,8 +70,25 @@ struct gSPInfo
 	u32 vertexColorBase;
 	u32 vertexi;
 
-	SPLight lights[12];
-	SPLight lookat[2];
+	struct
+	{
+		f32 rgb[12][3];
+		f32 xyz[12][3];
+		f32 i_xyz[12][3];
+		f32 pos_xyzw[12][4];
+		f32 ca[12], la[12], qa[12];
+	} lights;
+
+	struct
+	{
+		f32 rgb[2][3];
+		f32 xyz[2][3];
+		f32 i_xyz[2][3];
+		f32 pos_xyzw[2][4];
+		f32 ca[2], la[2], qa[2];
+	} lookat;
+	
+	s32 numLights;
 	bool lookatEnable;
 
 	struct
@@ -115,10 +119,13 @@ struct gSPInfo
 	} bgImage;
 
 	u32 geometryMode;
-	s32 numLights;
-
 	u32 changed;
 
+	struct {
+		u8 sid;
+		u32 flag;
+		u32 addr;
+	} selectDL;
 	u32 status[4];
 
 	struct
@@ -148,7 +155,8 @@ void gSPDMAVertex( u32 v, u32 n, u32 v0 );
 void gSPCBFDVertex( u32 v, u32 n, u32 v0 );
 void gSPDisplayList( u32 dl );
 void gSPBranchList( u32 dl );
-void gSPBranchLessZ( u32 branchdl, u32 vtx, f32 zval );
+void gSPBranchLessZ( u32 branchdl, u32 vtx, u32 zval );
+void gSPBranchLessW( u32 branchdl, u32 vtx, u32 wval );
 void gSPDlistCount(u32 count, u32 v);
 void gSPSprite2DBase(u32 _base );
 void gSPDMATriangles( u32 tris, u32 n );
@@ -173,6 +181,7 @@ void gSPSetOtherMode_H(u32 _length, u32 _shift, u32 _data);
 void gSPSetOtherMode_L(u32 _length, u32 _shift, u32 _data);
 void gSPLine3D(s32 v0, s32 v1, s32 flag);
 void gSPLineW3D( s32 v0, s32 v1, s32 wd, s32 flag );
+void gSPSetStatus(u32 sid, u32 val);
 void gSPObjRectangle(u32 _sp );
 void gSPObjRectangleR(u32 _sp);
 void gSPObjSprite(u32 _sp);
@@ -215,4 +224,5 @@ extern void (*gSPLightVertex)(SPVertex & _vtx);
 extern void (*gSPPointLightVertex)(SPVertex & _vtx, float * _vPos);
 extern void (*gSPBillboardVertex)(u32 v, u32 i);
 void gSPSetupFunctions();
+void gSPFlushTriangles();
 #endif

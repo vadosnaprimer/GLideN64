@@ -11,7 +11,6 @@
 #include "Types.h"
 #include "Debug.h"
 #include "convert.h"
-#include "OpenGL.h"
 #include "CRC.h"
 #include "FrameBuffer.h"
 #include "DepthBuffer.h"
@@ -20,6 +19,9 @@
 #include "VI.h"
 #include "Config.h"
 #include "Combiner.h"
+#include "Performance.h"
+#include "DisplayWindow.h"
+#include <Graphics/Context.h>
 
 using namespace std;
 
@@ -130,32 +132,13 @@ void gDPSetColorImage( u32 format, u32 size, u32 width, u32 address )
 	address = RSP_SegmentToPhysical( address );
 
 	if (gDP.colorImage.address != address || gDP.colorImage.width != width || gDP.colorImage.size != size) {
-		u32 height = 1;
-		if (width == VI.width)
-			height = VI.height > 0 ? VI.height : gDP.scissor.lry;
-		else if (!RSP.bLLE && width == gDP.scissor.lrx && width == gSP.viewport.width) {
-			height = max(gDP.scissor.lry, gSP.viewport.height);
-			if (VI.height > 0)
-				height = min(height, VI.height);
-		} else if (width == gDP.scissor.lrx)
-			height = gDP.scissor.lry;
-		else if (width <= 64)
-			height = width;
-		else if (!RSP.bLLE && gSP.viewport.height > 0)
-			height = gSP.viewport.height;
-		else
-			height = VI.height > 0 ? VI.height : gDP.scissor.lry;
-
-		if (config.frameBufferEmulation.enable) {
-				frameBufferList().saveBuffer(address, (u16)format, (u16)size, (u16)width, height, false);
-				gDP.colorImage.height = 0;
-		} else
-			gDP.colorImage.height = height;
+		frameBufferList().saveBuffer(address, (u16)format, (u16)size, (u16)width, false);
 	}
 
 	gDP.colorImage.format = format;
 	gDP.colorImage.size = size;
 	gDP.colorImage.width = width;
+	gDP.colorImage.height = 0;
 	gDP.colorImage.address = address;
 
 #ifdef DEBUG
@@ -211,7 +194,6 @@ void gDPSetEnvColor( u32 r, u32 g, u32 b, u32 a )
 	gDP.envColor.g = g * 0.0039215689f;
 	gDP.envColor.b = b * 0.0039215689f;
 	gDP.envColor.a = a * 0.0039215689f;
-	CombinerInfo::get().updateEnvColor();
 
 #ifdef DEBUG
 	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_COMBINE, "gDPSetEnvColor( %i, %i, %i, %i );\n",
@@ -225,7 +207,6 @@ void gDPSetBlendColor( u32 r, u32 g, u32 b, u32 a )
 	gDP.blendColor.g = g * 0.0039215689f;
 	gDP.blendColor.b = b * 0.0039215689f;
 	gDP.blendColor.a = a * 0.0039215689f;
-	CombinerInfo::get().updateBlendColor();
 
 	gDP.changed |= CHANGED_BLENDCOLOR;
 #ifdef DEBUG
@@ -240,7 +221,6 @@ void gDPSetFogColor( u32 r, u32 g, u32 b, u32 a )
 	gDP.fogColor.g = g * 0.0039215689f;
 	gDP.fogColor.b = b * 0.0039215689f;
 	gDP.fogColor.a = a * 0.0039215689f;
-	CombinerInfo::get().updateFogColor();
 
 	gDP.changed |= CHANGED_FOGCOLOR;
 
@@ -285,7 +265,6 @@ void gDPSetPrimColor( u32 m, u32 l, u32 r, u32 g, u32 b, u32 a )
 	gDP.primColor.g = g * 0.0039215689f;
 	gDP.primColor.b = b * 0.0039215689f;
 	gDP.primColor.a = a * 0.0039215689f;
-	CombinerInfo::get().updatePrimColor();
 
 #ifdef DEBUG
 	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_COMBINE, "gDPSetPrimColor( %i, %i, %i, %i, %i, %i );\n",
@@ -379,7 +358,7 @@ bool CheckForFrameBufferTexture(u32 _address, u32 _bytes)
 
 	FrameBufferList & fbList = frameBufferList();
 	FrameBuffer *pBuffer = fbList.findBuffer(_address);
-	bool bRes = pBuffer != nullptr;
+	bool bRes = pBuffer != nullptr && pBuffer->m_readable;
 	if (bRes) {
 		if ((config.generalEmulation.hacks & hack_blurPauseScreen) != 0) {
 			if (gDP.colorImage.address == gDP.depthImageAddress && pBuffer->m_copiedToRdram) {
@@ -413,7 +392,7 @@ bool CheckForFrameBufferTexture(u32 _address, u32 _bytes)
 		}
 
 		if (bRes) {
-			bRes = pBuffer->isValid();
+			bRes = pBuffer->isValid(false);
 			if (!bRes)
 				fbList.removeBuffer(pBuffer->m_startAddress);
 		}
@@ -713,7 +692,16 @@ void gDPSetScissor( u32 mode, f32 ulx, f32 uly, f32 lrx, f32 lry )
 
 	gDP.changed |= CHANGED_SCISSOR;
 
-	frameBufferList().correctHeight();
+	if (config.video.cropMode == Config::cmAuto && gDP.depthImageAddress != gDP.colorImage.address) {
+		const u32 maxCropH = VI.width / 16;
+		const u32 maxCropV = VI.height / 10;
+		if (ulx > 0 && ulx < maxCropH &&
+			uly > 0 && uly < maxCropV &&
+			(VI.width - lrx) < maxCropH && (VI.height - lry) < maxCropV) {
+			config.video.cropWidth = ulx;
+			config.video.cropHeight = uly;
+		}
+	}
 
 #ifdef DEBUG
 	DebugMsg( DEBUG_HIGH | DEBUG_IGNORED, "gDPSetScissor( %s, %.2f, %.2f, %.2f, %.2f );\n",
@@ -725,93 +713,72 @@ void gDPSetScissor( u32 mode, f32 ulx, f32 uly, f32 lrx, f32 lry )
 #endif
 }
 
-void gDPFillRDRAM(u32 address, s32 ulx, s32 uly, s32 lrx, s32 lry, u32 width, u32 size, u32 color, bool scissor)
-{
-	FrameBuffer * pCurrentBuffer = frameBufferList().getCurrent();
-	if (pCurrentBuffer != nullptr) {
-		pCurrentBuffer->m_cleared = true;
-		pCurrentBuffer->m_fillcolor = color;
-	}
-	if (scissor) {
-		ulx = min(max((float)ulx, gDP.scissor.ulx), gDP.scissor.lrx);
-		lrx = min(max((float)lrx, gDP.scissor.ulx), gDP.scissor.lrx);
-		uly = min(max((float)uly, gDP.scissor.uly), gDP.scissor.lry);
-		lry = min(max((float)lry, gDP.scissor.uly), gDP.scissor.lry);
-	}
-	const u32 stride = width << size >> 1;
-	const u32 lowerBound = address + lry*stride;
-	if (lowerBound > RDRAMSize)
-		lry -= (lowerBound - RDRAMSize) / stride;
-	u32 ci_width_in_dwords = width >> (3 - size);
-	ulx >>= (3 - size);
-	lrx >>= (3 - size);
-	u32 * dst = (u32*)(RDRAM + address);
-	dst += uly * ci_width_in_dwords;
-	for (u32 y = uly; y < lry; ++y) {
-		for (u32 x = ulx; x < lrx; ++x)
-			dst[x] = color;
-		dst += ci_width_in_dwords;
-	}
-}
-
 void gDPFillRectangle( s32 ulx, s32 uly, s32 lrx, s32 lry )
 {
-	OGLRender & render = video().getRender();
+	GraphicsDrawer & drawer = dwnd().getDrawer();
 	if (gDP.otherMode.cycleType == G_CYC_FILL) {
 		++lrx;
 		++lry;
 	} else if (lry == uly)
 		++lry;
 
-	bool bBufferCleared = false;
+	enum {
+		dbNone,
+		dbFound,
+		dbCleared
+	} depthBuffer = dbNone;
 	if (gDP.depthImageAddress == gDP.colorImage.address) {
 		// Game may use depth texture as auxilary color texture. Example: Mario Tennis
 		// If color is not depth clear color, that is most likely the case
 		if (gDP.fillColor.color == DepthClearColor) {
-			gDPFillRDRAM(gDP.colorImage.address, ulx, uly, lrx, lry, gDP.colorImage.width, gDP.colorImage.size, gDP.fillColor.color);
-			if (config.generalEmulation.enableFragmentDepthWrite == 0 ||
-				(ulx == 0 && uly == 0 && lrx == gDP.scissor.lrx && lry == gDP.scissor.lry)) {
-				render.clearDepthBuffer(ulx, uly, lrx, lry);
-				bBufferCleared = true;
+			frameBufferList().fillRDRAM(ulx, uly, lrx, lry);
+			depthBuffer = dbFound;
+			if (config.frameBufferEmulation.N64DepthCompare == 0 &&
+				(config.generalEmulation.enableFragmentDepthWrite == 0 ||
+				(ulx == 0 && uly == 0 && lrx == gDP.scissor.lrx && lry == gDP.scissor.lry))) {
+				drawer.clearDepthBuffer(ulx, uly, lrx, lry);
+				depthBuffer = dbCleared;
 			} else
 				depthBufferList().clearBuffer(ulx, uly, lrx, lry);
 		}
 	} else if (gDP.fillColor.color == DepthClearColor && gDP.otherMode.cycleType == G_CYC_FILL) {
+		depthBuffer = dbFound;
 		depthBufferList().saveBuffer(gDP.colorImage.address);
-		gDPFillRDRAM(gDP.colorImage.address, ulx, uly, lrx, lry, gDP.colorImage.width, gDP.colorImage.size, gDP.fillColor.color);
-		if (config.generalEmulation.enableFragmentDepthWrite == 0 ||
-			(ulx == 0 && uly == 0 && lrx == gDP.scissor.lrx && lry == gDP.scissor.lry)) {
-			render.clearDepthBuffer(ulx, uly, lrx, lry);
-			bBufferCleared = true;
+		frameBufferList().fillRDRAM(ulx, uly, lrx, lry);
+		if (config.frameBufferEmulation.N64DepthCompare == 0 &&
+			(config.generalEmulation.enableFragmentDepthWrite == 0 ||
+			(ulx == 0 && uly == 0 && lrx == gDP.scissor.lrx && lry == gDP.scissor.lry))) {
+			drawer.clearDepthBuffer(ulx, uly, lrx, lry);
+			depthBuffer = dbCleared;
 		} else
 			depthBufferList().clearBuffer(ulx, uly, lrx, lry);
 	}
 
-	if (!bBufferCleared) {
-		frameBufferList().setBufferChanged();
-		f32 fillColor[4];
-		gDPGetFillColor(fillColor);
-
+	if (depthBuffer != dbCleared) {
 		if (gDP.otherMode.cycleType == G_CYC_FILL) {
-			if ((ulx == 0) && (uly == 0) && (lrx == gDP.scissor.lrx) && (lry == gDP.scissor.lry)) {
-				gDPFillRDRAM(gDP.colorImage.address, ulx, uly, lrx, lry, gDP.colorImage.width, gDP.colorImage.size, gDP.fillColor.color);
-				render.clearColorBuffer(fillColor);
-			} else
-				render.drawRect(ulx, uly, lrx, lry, fillColor);
-		} else
-			render.drawRect(ulx, uly, lrx, lry, fillColor);
-	}
-
-	if (lrx == gDP.colorImage.width) {
-		if (gDP.otherMode.cycleType == G_CYC_FILL) {
-			if (lry > (u32)gDP.scissor.lry)
-				gDP.colorImage.height = (u32)max(gDP.colorImage.height, (u32)gDP.scissor.lry);
-			else
-				gDP.colorImage.height = (u32)max((s32)gDP.colorImage.height, lry);
+			f32 fillColor[4];
+			gDPGetFillColor(fillColor);
+			if ((depthBuffer == dbNone) &&
+				(ulx == 0) &&
+				(uly == 0) &&
+				(lrx == gDP.scissor.lrx) &&
+				(lry == gDP.scissor.lry)) {
+				frameBufferList().fillRDRAM(ulx, uly, lrx, lry);
+				drawer.clearColorBuffer(fillColor);
+			} else {
+				gDP.rectColor.r = fillColor[0];
+				gDP.rectColor.g = fillColor[1];
+				gDP.rectColor.b = fillColor[2];
+				gDP.rectColor.a = fillColor[3];
+				drawer.drawRect(ulx, uly, lrx, lry);
+			}
+		} else {
+			gDP.rectColor = gDPInfo::Color();
+			drawer.drawRect(ulx, uly, lrx, lry);
 		}
-		else
-			gDP.colorImage.height = max(gDP.colorImage.height, (u32)gDP.scissor.lry);
 	}
+
+	frameBufferList().setBufferChanged(lry);
 
 #ifdef DEBUG
 	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPFillRectangle( %i, %i, %i, %i );\n",
@@ -831,7 +798,6 @@ void gDPSetConvert( s32 k0, s32 k1, s32 k2, s32 k3, s32 k4, s32 k5 )
 	gDP.convert.k3 = SIGN(k3, 9);
 	gDP.convert.k4 = SIGN(k4, 9);
 	gDP.convert.k5 = SIGN(k5, 9);
-	CombinerInfo::get().updateConvertColor();
 }
 
 void gDPSetKeyR( u32 cR, u32 sR, u32 wR )
@@ -849,7 +815,6 @@ void gDPSetKeyGB(u32 cG, u32 sG, u32 wG, u32 cB, u32 sB, u32 wB )
 	gDP.key.center.b = cB * 0.0039215689f;
 	gDP.key.scale.b = sB * 0.0039215689f;
 	gDP.key.width.b = wB * 0.0039215689f;
-	CombinerInfo::get().updateKeyColor();
 }
 
 void gDPTextureRectangle(f32 ulx, f32 uly, f32 lrx, f32 lry, s32 tile, f32 s, f32 t, f32 dsdx, f32 dtdy , bool flip)
@@ -880,21 +845,23 @@ void gDPTextureRectangle(f32 ulx, f32 uly, f32 lrx, f32 lry, s32 tile, f32 s, f3
 		lrt = t + (lry - uly - 1) * dtdy;
 	}
 
-	OGLRender::TexturedRectParams params(ulx, uly, lrx, lry, s, t, lrs, lrt, fabsf(dsdx), fabsf(dtdy),
-										 flip, false, true, frameBufferList().getCurrent());
-	OGLRender & render = video().getRender();
+	gDP.rectColor = gDPInfo::Color();
+	if (gDP.otherMode.cycleType < G_CYC_COPY) {
+		if (gDP.combine.mA0 == G_ACMUX_0 && gDP.combine.aA0 == G_ACMUX_SHADE)
+			gDP.rectColor.a = 1.0f;
+	}
+
+	GraphicsDrawer & drawer = dwnd().getDrawer();
+	GraphicsDrawer::TexturedRectParams params(ulx, uly, lrx, lry, s, t, lrs, lrt, fabsf(dsdx), fabsf(dtdy),
+		flip, false, true, frameBufferList().getCurrent());
 	if (config.generalEmulation.enableNativeResTexrects == 0 && config.generalEmulation.correctTexrectCoords != Config::tcDisable)
-		render.correctTexturedRectParams(params);
-	render.drawTexturedRect(params);
+		drawer.correctTexturedRectParams(params);
+	drawer.drawTexturedRect(params);
 
 	gSP.textureTile[0] = textureTileOrg[0];
 	gSP.textureTile[1] = textureTileOrg[1];
 
-	frameBufferList().setBufferChanged();
-	if (gDP.colorImage.width < 64)
-		gDP.colorImage.height = (u32)max( (f32)gDP.colorImage.height, lry );
-	else
-		gDP.colorImage.height = max( gDP.colorImage.height, (u32)gDP.scissor.lry );
+	frameBufferList().setBufferChanged(lry);
 
 #ifdef DEBUG
 	if (flip)
@@ -913,10 +880,10 @@ void gDPFullSync()
 		frameBufferList().removeAux();
 	}
 
-	video().getRender().flush();
+	dwnd().getDrawer().flush();
 
 	const bool sync = config.frameBufferEmulation.copyToRDRAM == Config::ctSync;
-	if (config.frameBufferEmulation.copyToRDRAM != Config::ctDisable &&
+	if ((config.frameBufferEmulation.copyToRDRAM != Config::ctDisable || (config.generalEmulation.hacks & hack_subscreen) != 0) &&
 		!FBInfo::fbInfo.isSupported() &&
 		frameBufferList().getCurrent() != nullptr &&
 		!frameBufferList().getCurrent()->isAuxiliary()
@@ -924,9 +891,11 @@ void gDPFullSync()
 		FrameBuffer_CopyToRDRAM(gDP.colorImage.address, sync);
 
 	if (RSP.bLLE) {
-		if (config.frameBufferEmulation.copyDepthToRDRAM == Config::cdCopyFromVRam && !FBInfo::fbInfo.isSupported())
+		if (config.frameBufferEmulation.copyDepthToRDRAM != Config::cdDisable && !FBInfo::fbInfo.isSupported())
 			FrameBuffer_CopyDepthBuffer(gDP.colorImage.address);
 	}
+
+	perf.increaseFramesCount();
 
 	*REG.MI_INTR |= MI_INTR_DP;
 
@@ -973,6 +942,7 @@ void gDPNoOp()
 
 void gDPLLETriangle(u32 _w1, u32 _w2, int _shade, int _texture, int _zbuffer, u32 * _pRdpCmd)
 {
+	gSP.texture.level = _SHIFTR(_w1, 19, 3);
 	const u32 tile = _SHIFTR(_w1, 16, 3);
 	gDPTile *textureTileOrg[2];
 	textureTileOrg[0] = gSP.textureTile[0];
@@ -1078,9 +1048,9 @@ void gDPLLETriangle(u32 _w1, u32 _w2, int _shade, int _texture, int _zbuffer, u3
 #define SSCALE(s, _w) (PERSP_EN? float(PERSP(s, _w))/(1 << 10) : float(s)/(1<<21))
 #define TSCALE(s, w) (PERSP_EN? float(PERSP(s, w))/(1 << 10) : float(s)/(1<<21))
 
-	OGLRender & render = video().getRender();
-	render.setDMAVerticesSize(16);
-	SPVertex * vtx0 = render.getDMAVerticesData();
+	GraphicsDrawer & drawer = dwnd().getDrawer();
+	drawer.setDMAVerticesSize(16);
+	SPVertex * vtx0 = drawer.getDMAVerticesData();
 	SPVertex * vtx = vtx0;
 
 	xleft = xm;
@@ -1263,7 +1233,7 @@ void gDPLLETriangle(u32 _w1, u32 _w2, int _shade, int _texture, int _zbuffer, u3
 	if (_zbuffer != 0)
 		gSP.geometryMode |= G_ZBUFFER;
 
-	render.drawScreenSpaceTriangle(vtx - vtx0);
+	drawer.drawScreenSpaceTriangle(vtx - vtx0);
 	gSP.textureTile[0] = textureTileOrg[0];
 	gSP.textureTile[1] = textureTileOrg[1];
 }

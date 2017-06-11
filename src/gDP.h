@@ -191,8 +191,9 @@ struct gDPInfo
 
 	struct Color
 	{
+		Color() : r(0), g(0), b(0), a(0) {}
 		f32 r, g, b, a;
-	} fogColor,  blendColor, envColor;
+	} fogColor,  blendColor, envColor, rectColor;
 
 	struct
 	{
@@ -220,7 +221,6 @@ struct gDPInfo
 	{
 		u32 format, size, width, height, bpl;
 		u32 address, changed;
-		u32 depthImage;
 	} colorImage;
 
 	u32	depthImageAddress;
@@ -288,8 +288,6 @@ void gDPTriFillZ( u32 w0, u32 w1 );
 void gDPTriShadeZ( u32 w0, u32 w1 );
 void gDPTriTxtrZ( u32 w0, u32 w1 );
 void gDPTriShadeTxtrZ( u32 w0, u32 w1 );
-
-void gDPFillRDRAM( u32 address, s32 ulx, s32 uly, s32 lrx, s32 lry, u32 width, u32 size,  u32 color, bool scissor=true );
 
 #endif
 

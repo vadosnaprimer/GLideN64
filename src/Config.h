@@ -4,7 +4,7 @@
 #include <string>
 #include "Types.h"
 
-#define CONFIG_VERSION_CURRENT 13U
+#define CONFIG_VERSION_CURRENT 17U
 
 #define BILINEAR_3POINT   0
 #define BILINEAR_STANDARD 1
@@ -17,6 +17,12 @@ struct Config
 
 	std::string translationFile;
 
+	enum CropMode {
+		cmDisable = 0,
+		cmAuto,
+		cmCustom
+	};
+
 	struct
 	{
 		u32 fullscreen;
@@ -24,6 +30,9 @@ struct Config
 		u32 fullscreenWidth, fullscreenHeight, fullscreenRefresh;
 		u32 multisampling;
 		u32 verticalSync;
+		u32 cropMode;
+		u32 cropWidth;
+		u32 cropHeight;
 	} video;
 
 	struct
@@ -35,13 +44,13 @@ struct Config
 		u32 screenShotFormat;
 	} texture;
 
-    enum TexrectCorrectionMode {
-        tcDisable = 0,
-        tcSmart,
-        tcForce
-    };
+	enum TexrectCorrectionMode {
+		tcDisable = 0,
+		tcSmart,
+		tcForce
+	};
 
-    struct {
+	struct {
 		u32 enableNoise;
 		u32 enableLOD;
 		u32 enableHWLighting;
@@ -51,8 +60,9 @@ struct Config
 		u32 enableNativeResTexrects;
 		u32 enableLegacyBlending;
 		u32 enableFragmentDepthWrite;
+		u32 enableBlitScreenWorkaround;
 		u32 hacks;
-#ifdef ANDROID
+#ifdef OS_ANDROID
 		u32 forcePolygonOffset;
 		f32 polygonOffsetFactor;
 		f32 polygonOffsetUnits;
@@ -145,6 +155,24 @@ struct Config
 		f32 level;
 	} gammaCorrection;
 
+	enum CountersPosition {
+		posTopLeft = 1,
+		posTopCenter = 2,
+		posTopRight = 4,
+		posTop = posTopLeft | posTopCenter | posTopRight,
+		posBottomLeft = 8,
+		posBottomCenter = 16,
+		posBottomRight = 32,
+		posBottom = posBottomLeft | posBottomCenter | posBottomRight
+	};
+
+	struct {
+		u32 vis;
+		u32 fps;
+		u32 percent;
+		u32 pos;
+	} onScreenDisplay;
+
 	void resetToDefaults();
 };
 
@@ -156,14 +184,18 @@ struct Config
 #define hack_pilotWings				(1<<5)  //Special blend mode for PilotWings.
 #define hack_subscreen				(1<<6)  //Fix subscreen delay in Zelda OOT and Doubutsu no Mori
 #define hack_blastCorps				(1<<7)  //Blast Corps black polygons
-#define hack_ignoreVIHeightChange	(1<<8)  //Do not reset FBO when VI height is changed. Space Invaders need it.
+#define hack_NegativeViewport		(1<<8)  //Reverse negative viewport when game set it. Eikou no Saint Andrews, pachinko nichi 365
 #define hack_rectDepthBufferCopyPD	(1<<9)  //Copy depth buffer only when game need it. Optimized for PD
 #define hack_rectDepthBufferCopyCBFD (1<<10) //Copy depth buffer only when game need it. Optimized for CBFD
+#define hack_WinBack				(1<<11) //Hack for WinBack to remove gray rectangle in HLE mode
 #define hack_ZeldaMM				(1<<12) //Special hacks for Zelda MM
 #define hack_ModifyVertexXyInShader	(1<<13) //Pass screen coordinates provided in gSPModifyVertex to vertes shader.
 #define hack_legoRacers				(1<<14) //LEGO racers course map
 #define hack_doNotResetTLUTmode		(1<<15) //Don't set TLUT mode to none after dlist end. Quake 64
 #define hack_LoadDepthTextures		(1<<16) //Load textures for depth buffer
+#define hack_Snap					(1<<17) //Frame buffer settings for camera detection in Pokemon Snap. Copy aux buffers at fullsync
+#define hack_MK64					(1<<18) //Hack for load MK64 HD textures properly.
+#define hack_RE2					(1<<19) //RE2 hacks.
 
 extern Config config;
 

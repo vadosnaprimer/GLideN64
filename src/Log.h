@@ -10,32 +10,12 @@
 
 #define LOG_LEVEL LOG_WARNING
 
-#if LOG_LEVEL>0
-#ifdef ANDROID
-#include <android/log.h>
+#if LOG_LEVEL > 0
 
-#define LOG(A, ...) \
-    if (A <= LOG_LEVEL) \
-    { \
-		__android_log_print(ANDROID_LOG_DEBUG, "GLideN64", __VA_ARGS__); \
-    }
+#include "Types.h"
 
-#else // ANDROID
-#include <stdio.h>
-#include <stdarg.h>
-inline void LOG( u16 type, const char * format, ... ) {
-	if (type > LOG_LEVEL)
-		return;
-	FILE *dumpFile = fopen( "gliden64.log", "a+" );
-	if (dumpFile == NULL)
-		return;
-	va_list va;
-	va_start( va, format );
-	vfprintf( dumpFile, format, va );
-	fclose( dumpFile );
-	va_end( va );
-}
-#endif // ANDROID
+void LOG(u16 type, const char * format, ...);
+
 #else
 
 #define LOG(A, ...)
@@ -43,19 +23,7 @@ inline void LOG( u16 type, const char * format, ... ) {
 #endif
 
 #if defined(OS_WINDOWS) && !defined(MINGW)
-#include "windows/GLideN64_windows.h"
-#include <stdio.h>
-
-inline void debugPrint(const char * format, ...) {
-	char text[256];
-	wchar_t wtext[256];
-	va_list va;
-	va_start(va, format);
-	vsprintf(text, format, va);
-	mbstowcs(wtext, text, 256);
-	OutputDebugString(wtext);
-	va_end(va);
-}
+void debugPrint(const char * format, ...);
 #else
 #define debugPrint(A, ...)
 #endif

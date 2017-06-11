@@ -23,6 +23,8 @@ void Config::resetToDefaults()
 	video.fullscreenRefresh = 60;
 	video.multisampling = 0;
 	video.verticalSync = 0;
+	video.cropMode = cmDisable;
+	video.cropWidth = video.cropHeight = 0;
 
 	texture.maxAnisotropy = 0;
 	texture.bilinearMode = BILINEAR_STANDARD;
@@ -38,19 +40,18 @@ void Config::resetToDefaults()
 	generalEmulation.enableNativeResTexrects = 0;
 	generalEmulation.enableLegacyBlending = 0;
 	generalEmulation.hacks = 0;
-#ifdef GLES2
+#ifdef OS_ANDROID
 	generalEmulation.enableFragmentDepthWrite = 0;
-#else
-	generalEmulation.enableFragmentDepthWrite = 1;
-#endif
-#ifdef ANDROID
+	generalEmulation.enableBlitScreenWorkaround = 0;
 	generalEmulation.forcePolygonOffset = 0;
 	generalEmulation.polygonOffsetFactor = 0.0f;
 	generalEmulation.polygonOffsetUnits = 0.0f;
+#else
+	generalEmulation.enableFragmentDepthWrite = 1;
 #endif
 
 	frameBufferEmulation.enable = 1;
-	frameBufferEmulation.copyDepthToRDRAM = cdDisable;
+	frameBufferEmulation.copyDepthToRDRAM = cdSoftwareRender;
 	frameBufferEmulation.copyFromRDRAM = 0;
 	frameBufferEmulation.copyAuxToRDRAM = 0;
 	frameBufferEmulation.copyToRDRAM = ctAsync;
@@ -86,7 +87,7 @@ void Config::resetToDefaults()
 
 #ifdef OS_WINDOWS
 	font.name.assign("arial.ttf");
-#elif defined (ANDROID)
+#elif defined (OS_ANDROID)
 	font.name.assign("DroidSans.ttf");
 #elif defined (PANDORA)
 	font.name.assign("LiberationMono-Regular.ttf");
@@ -109,4 +110,9 @@ void Config::resetToDefaults()
 
 	gammaCorrection.force = 0;
 	gammaCorrection.level = 2.0f;
+
+	onScreenDisplay.vis = 0;
+	onScreenDisplay.fps = 0;
+	onScreenDisplay.percent = 0;
+	onScreenDisplay.pos = posBottomLeft;
 }

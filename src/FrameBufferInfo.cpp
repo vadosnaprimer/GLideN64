@@ -1,7 +1,7 @@
 #include "FrameBufferInfoAPI.h"
 #include "FrameBufferInfo.h"
 #include "Config.h"
-#include "OpenGL.h"
+#include "gSP.h"
 #include "FrameBuffer.h"
 #include "DepthBuffer.h"
 #include "RSP.h"
@@ -54,12 +54,10 @@ namespace FBInfo {
 			return;
 
 		if (pBuffer->m_isDepthBuffer) {
-			if (config.frameBufferEmulation.copyDepthToRDRAM != Config::cdSoftwareRender) {
-				if (config.frameBufferEmulation.fbInfoReadDepthChunk != 0)
-					FrameBuffer_CopyDepthBufferChunk(address);
-				else if (pBuffer != m_pReadBuffer)
-					FrameBuffer_CopyDepthBuffer(address);
-			}
+			if (config.frameBufferEmulation.fbInfoReadDepthChunk != 0)
+				FrameBuffer_CopyDepthBufferChunk(address);
+			else if (pBuffer != m_pReadBuffer)
+				FrameBuffer_CopyDepthBuffer(address);
 		} else {
 			if (config.frameBufferEmulation.fbInfoReadColorChunk != 0)
 				FrameBuffer_CopyChunkToRDRAM(address);

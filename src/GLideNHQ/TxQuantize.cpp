@@ -32,21 +32,13 @@
 
 #include "TxQuantize.h"
 
-TxQuantize::TxQuantize()
+static const unsigned char One2Eight[2] =
 {
-	_txUtil = new TxUtil();
+	0, // 0 = 00000000
+	255, // 1 = 11111111
+};
 
-	/* get number of CPU cores. */
-	_numcore = _txUtil->getNumberofProcessors();
-}
-
-
-TxQuantize::~TxQuantize()
-{
-	delete _txUtil;
-}
-
-const volatile unsigned char Five2Eight[32] =
+static const unsigned char Five2Eight[32] =
 {
 	0, // 00000 = 00000000
 	8, // 00001 = 00001000
@@ -82,11 +74,16 @@ const volatile unsigned char Five2Eight[32] =
 	255  // 11111 = 11111111
 };
 
-const volatile unsigned char One2Eight[2] =
+TxQuantize::TxQuantize()
 {
-	0, // 0 = 00000000
-	255, // 1 = 11111111
-};
+	/* get number of CPU cores. */
+	_numcore = TxUtil::getNumberofProcessors();
+}
+
+
+TxQuantize::~TxQuantize()
+{
+}
 
 void
 TxQuantize::ARGB1555_ARGB8888(uint32* src, uint32* dest, int width, int height)

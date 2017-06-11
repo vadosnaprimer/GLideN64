@@ -7,9 +7,10 @@
 #include "ConfigDialog.h"
 #include "Settings.h"
 
-#ifndef _DEBUG
+#ifdef QT_STATICPLUGIN
 #include <QtPlugin>
 Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)
+Q_IMPORT_PLUGIN(QICOPlugin)
 #endif
 
 inline void initMyResource() { Q_INIT_RESOURCE(icon); }
@@ -31,7 +32,7 @@ int openConfigDialog(const wchar_t * _strFileName, bool & _accepted)
 	if (translator.load(getTranslationFile(), strIniFileName))
 		a.installTranslator(&translator);
 
-	ConfigDialog w;
+	ConfigDialog w(Q_NULLPTR, Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
 
 	w.setIniPath(strIniFileName);
 	w.show();
@@ -54,7 +55,7 @@ int openAboutDialog(const wchar_t * _strFileName)
 	if (translator.load(getTranslationFile(), QString::fromWCharArray(_strFileName)))
 		a.installTranslator(&translator);
 
-	AboutDialog w;
+	AboutDialog w(Q_NULLPTR, Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
 	w.show();
 	return a.exec();
 }

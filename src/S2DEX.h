@@ -1,6 +1,8 @@
 #ifndef S2DEX_H
 #define S2DEX_H
 
+#include "Types.h"
+
 #define	G_BGLT_LOADBLOCK		0x0033
 #define	G_BGLT_LOADTILE			0xfff4
 
@@ -173,6 +175,7 @@ void S2DEX_BG_Copy( u32 w0, u32 w1 );
 void S2DEX_Obj_Rectangle( u32 w0, u32 w1 );
 void S2DEX_Obj_Sprite( u32 w0, u32 w1 );
 void S2DEX_Obj_MoveMem( u32 w0, u32 w1 );
+void S2DEX_RDPHalf_0( u32 w0, u32 w1 );
 void S2DEX_Select_DL( u32 w0, u32 w1 );
 void S2DEX_Obj_RenderMode( u32 w0, u32 w1 );
 void S2DEX_Obj_Rectangle_R( u32 w0, u32 w1 );

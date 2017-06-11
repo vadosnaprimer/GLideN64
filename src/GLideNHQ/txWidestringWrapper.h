@@ -2,8 +2,9 @@
 #define ___TXWIDESCREENWRAPPER_H__
 
 #include <string>
+#include <algorithm>
 
-#ifdef ANDROID
+#ifdef OS_ANDROID
 
 int tx_swprintf(wchar_t* ws, size_t len, const wchar_t* format, ...);
 bool wccmp(const wchar_t* w1, const wchar_t* w2);
@@ -49,13 +50,19 @@ private:
 
 #define wst(A) dummyWString(A).c_str()
 
+#define removeColon(A)
 #else
 
 #define tx_wstring std::wstring
 #define tx_swprintf	swprintf
 #define wst(A) L##A
 #define wccmp(A, B) A[0] == B[0]
+inline
+void removeColon(tx_wstring& _s)
+{
+	std::replace(_s.begin(), _s.end(), L':', L'-');
+}
 
-#endif // ANDROID
+#endif // OS_ANDROID
 
 #endif // ___TXWIDESCREENWRAPPER_H__

@@ -1,10 +1,15 @@
 #ifndef DepthBufferToRDRAM_H
 #define DepthBufferToRDRAM_H
 
-#include <OpenGL.h>
+#include <memory>
+#include <Graphics/ObjectHandle.h>
+
+namespace graphics {
+	class PixelReadBuffer;
+}
 
 struct CachedTexture;
-struct DepthBuffer;
+struct FrameBuffer;
 
 class DepthBufferToRDRAM
 {
@@ -27,12 +32,12 @@ private:
 	// Convert pixel from video memory to N64 depth buffer format.
 	static u16 _FloatToUInt16(f32 _z);
 
-	GLuint m_FBO;
-	GLuint m_PBO;
+	graphics::ObjectHandle m_FBO;
+	std::unique_ptr<graphics::PixelReadBuffer> m_pbuf;
 	u32 m_frameCount;
 	CachedTexture * m_pColorTexture;
 	CachedTexture * m_pDepthTexture;
-	DepthBuffer * m_pCurDepthBuffer;
+	FrameBuffer * m_pCurFrameBuffer;
 };
 
 #endif // DepthBufferToRDRAM_H

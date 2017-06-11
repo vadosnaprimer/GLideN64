@@ -36,7 +36,7 @@
 
 #ifdef OS_WINDOWS
 #include <GL/gl.h>
-#include "glext.h"
+#include <GL/glext.h>
 #elif defined(GLES2)
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
@@ -53,9 +53,15 @@
 #include <GLES3/gl3ext.h>
 #define GL_COLOR_INDEX8_EXT  0x80E5
 #elif defined(OS_MAC_OS_X)
-#include <OpenGL/gl.h>
-#include <OpenGL/glext.h>
+#include <OpenGL/gl3.h>
+#include <GL/glext.h>
+#ifndef GL_COLOR_INDEX8_EXT
+#define GL_COLOR_INDEX8_EXT  0x80E5
+#endif
 #elif defined(OS_LINUX)
+#include <GL/gl.h>
+#include <GL/glext.h>
+#elif defined(OS_ANDROID)
 #include <GL/gl.h>
 #include <GL/glext.h>
 #endif // OS_WINDOWS

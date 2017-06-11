@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstring>
 #include "Debug.h"
 #include "RSP.h"
 #include "RDP.h"
@@ -14,116 +15,11 @@
 #include "PluginAPI.h"
 #include "Config.h"
 #include "TextureFilterHandler.h"
+#include "DisplayWindow.h"
 
 using namespace std;
 
 RSPInfo		RSP;
-
-void RSP_LoadMatrix( f32 mtx[4][4], u32 address )
-{
-	f32 recip = 1.5258789e-05f;
-#ifdef WIN32_ASM
-	__asm {
-		mov		esi, dword ptr [RDRAM];
-		add		esi, dword ptr [address];
-		mov		edi, dword ptr [mtx];
-
-		mov		ecx, 4
-LoadLoop:
-		fild	word ptr [esi+02h]
-		movzx	eax, word ptr [esi+22h]
-		mov		dword ptr [edi], eax
-		fild	dword ptr [edi]
-		fmul	dword ptr [recip]
-		fadd
-		fstp	dword ptr [edi]
-
-		fild	word ptr [esi+00h]
-		movzx	eax, word ptr [esi+20h]
-		mov		dword ptr [edi+04h], eax
-		fild	dword ptr [edi+04h]
-		fmul	dword ptr [recip]
-		fadd
-		fstp	dword ptr [edi+04h]
-
-		fild	word ptr [esi+06h]
-		movzx	eax, word ptr [esi+26h]
-		mov		dword ptr [edi+08h], eax
-		fild	dword ptr [edi+08h]
-		fmul	dword ptr [recip]
-		fadd
-		fstp	dword ptr [edi+08h]
-
-		fild	word ptr [esi+04h]
-		movzx	eax, word ptr [esi+24h]
-		mov		dword ptr [edi+0Ch], eax
-		fild	dword ptr [edi+0Ch]
-		fmul	dword ptr [recip]
-		fadd
-		fstp	dword ptr [edi+0Ch]
-
-		add		esi, 08h
-		add		edi, 10h
-		loop	LoadLoop
-	}
-#else // WIN32_ASM
-# ifdef X86_ASM
-	__asm__ __volatile__(
-	".intel_syntax noprefix"					"\n\t"
-	"LoadLoop:"									"\n\t"
-	"	fild	word ptr [esi+0x02]"			"\n\t"
-	"	movzx	eax, word ptr [esi+0x22]"		"\n\t"
-	"	mov		dword ptr [edi], eax"			"\n\t"
-	"	fild	dword ptr [edi]"				"\n\t"
-	"	fmul	%0"								"\n\t"
-	"	fadd"									"\n\t"
-	"	fstp	dword ptr [edi]"				"\n\t"
-
-	"	fild	word ptr [esi+0x00]"			"\n\t"
-	"	movzx	eax, word ptr [esi+0x20]"		"\n\t"
-	"	mov		dword ptr [edi+0x04], eax"		"\n\t"
-	"	fild	dword ptr [edi+0x04]"			"\n\t"
-	"	fmul	%0"								"\n\t"
-	"	fadd"									"\n\t"
-	"	fstp	dword ptr [edi+0x04]"			"\n\t"
-
-	"	fild	word ptr [esi+0x06]"			"\n\t"
-	"	movzx	eax, word ptr [esi+0x26]"		"\n\t"
-	"	mov		dword ptr [edi+0x08], eax"		"\n\t"
-	"	fild	dword ptr [edi+0x08]"			"\n\t"
-	"	fmul	%0"								"\n\t"
-	"	fadd"									"\n\t"
-	"	fstp	dword ptr [edi+0x08]"			"\n\t"
-
-	"	fild	word ptr [esi+0x04]"			"\n\t"
-	"	movzx	eax, word ptr [esi+0x24]"		"\n\t"
-	"	mov		dword ptr [edi+0x0C], eax"		"\n\t"
-	"	fild	dword ptr [edi+0x0C]"			"\n\t"
-	"	fmul	%0"								"\n\t"
-	"	fadd"									"\n\t"
-	"	fstp	dword ptr [edi+0x0C]"			"\n\t"
-
-	"	add		esi, 0x08"						"\n\t"
-	"	add		edi, 0x10"						"\n\t"
-	"	loop	LoadLoop"						"\n\t"
-	".att_syntax prefix"						"\n\t"
-	: /* no output */
-	: "f"(recip), "S"((int)RDRAM+address), "D"(mtx), "c"(4)
-	: "memory" );
-# else // X86_ASM
-	struct _N64Matrix
-	{
-		SHORT integer[4][4];
-		WORD fraction[4][4];
-	} *n64Mat = (struct _N64Matrix *)&RDRAM[address];
-	int i, j;
-
-	for (i = 0; i < 4; i++)
-		for (j = 0; j < 4; j++)
-			mtx[i][j] = (GLfloat)(n64Mat->integer[i][j^1]) + (GLfloat)(n64Mat->fraction[i][j^1]) * recip;
-# endif // !X86_ASM
-#endif // WIN32_ASM
-}
 
 void RSP_CheckDLCounter()
 {
@@ -139,14 +35,14 @@ void RSP_CheckDLCounter()
 
 void RSP_ProcessDList()
 {
-	if (ConfigOpen || video().isResizeWindow()) {
+	if (ConfigOpen || dwnd().isResizeWindow()) {
 		*REG.MI_INTR |= MI_INTR_DP;
 		CheckInterrupts();
 		return;
 	}
 	if (*REG.VI_ORIGIN != VI.lastOrigin) {
 		VI_UpdateSize();
-		video().updateScale();
+		dwnd().updateScale();
 	}
 
 	RSP.PC[0] = *(u32*)&DMEM[0x0FF0];
@@ -216,11 +112,11 @@ void RSP_ProcessDList()
 		}
 	}
 
-	if (config.frameBufferEmulation.copyDepthToRDRAM == Config::cdCopyFromVRam) {
+	if (config.frameBufferEmulation.copyDepthToRDRAM != Config::cdDisable) {
 		if ((config.generalEmulation.hacks & hack_rectDepthBufferCopyCBFD) != 0) {
 			; // do nothing
 		} else if ((config.generalEmulation.hacks & hack_rectDepthBufferCopyPD) != 0) {
-			if (rectDepthBufferCopyFrame == video().getBuffersSwapCount())
+			if (rectDepthBufferCopyFrame == dwnd().getBuffersSwapCount())
 				FrameBuffer_CopyDepthBuffer(gDP.colorImage.address);
 		} else if (!FBInfo::fbInfo.isSupported())
 			FrameBuffer_CopyDepthBuffer(gDP.colorImage.address);
@@ -239,8 +135,8 @@ void RSP_SetDefaultState()
 	gDP.loadTile = &gDP.tiles[7];
 	gSP.textureTile[0] = &gDP.tiles[0];
 	gSP.textureTile[1] = &gDP.tiles[1];
-	gSP.lookat[0].x = gSP.lookat[1].x = 1.0f;
-	gSP.lookatEnable = false;
+	gSP.lookat.xyz[0][Y] = gSP.lookat.xyz[1][X] = 1.0f;
+	gSP.lookatEnable = true;
 
 	gSP.objMatrix.A = 1.0f;
 	gSP.objMatrix.B = 0.0f;
@@ -323,6 +219,8 @@ void RSP_Init()
 		config.generalEmulation.hacks |= hack_Ogre64;
 	else if (strstr(RSP.romname, (const char *)"F1 POLE POSITION 64") != nullptr)
 		config.generalEmulation.hacks |= hack_noDepthFrameBuffers;
+	else if (strstr(RSP.romname, (const char *)"ROADSTERS TROPHY") != nullptr)
+		config.generalEmulation.hacks |= hack_noDepthFrameBuffers;
 	else if (strstr(RSP.romname, (const char *)"CONKER BFD") != nullptr)
 		config.generalEmulation.hacks |= hack_blurPauseScreen | hack_rectDepthBufferCopyCBFD;
 	else if (strstr(RSP.romname, (const char *)"MICKEY USA") != nullptr)
@@ -335,14 +233,17 @@ void RSP_Init()
 		config.generalEmulation.hacks |= hack_pilotWings;
 	else if (strstr(RSP.romname, (const char *)"THE LEGEND OF ZELDA") != nullptr ||
 			 strstr(RSP.romname, (const char *)"ZELDA MASTER QUEST") != nullptr ||
-			 strstr(RSP.romname, (const char *)"DOUBUTSUNOMORI") != nullptr)
+			 strstr(RSP.romname, (const char *)"DOUBUTSUNOMORI") != nullptr ||
+			 strstr(RSP.romname, (const char *)"ANIMAL FOREST") != nullptr)
 		config.generalEmulation.hacks |= hack_subscreen;
 	else if (strstr(RSP.romname, (const char *)"LEGORacers") != nullptr)
 		config.generalEmulation.hacks |= hack_legoRacers;
 	else if (strstr(RSP.romname, (const char *)"Blast") != nullptr)
 		config.generalEmulation.hacks |= hack_blastCorps;
-	else if (strstr(RSP.romname, (const char *)"SPACE INVADERS") != nullptr)
-		config.generalEmulation.hacks |= hack_ignoreVIHeightChange;
+	else if (strstr(RSP.romname, (const char *)"PACHINKO365NICHI") != nullptr ||
+			 strstr(RSP.romname, // Eikou no Saint Andrews (J)
+				(const char *)"\xb4\xb2\xba\xb3\xc9\xbe\xdd\xc4\xb1\xdd\xc4\xde\xd8\xad\xb0\xbd\x00") != nullptr)
+		config.generalEmulation.hacks |= hack_NegativeViewport;
 	else if (strstr(RSP.romname, (const char *)"MASK") != nullptr) // Zelda MM
 		config.generalEmulation.hacks |= hack_ZeldaMM;
 	else if (strstr(RSP.romname, (const char *)"Perfect Dark") != nullptr ||
@@ -355,6 +256,16 @@ void RSP_Init()
 		config.generalEmulation.hacks |= hack_doNotResetTLUTmode;
 	else if (strstr(RSP.romname, (const char *)"quarterback_club_98") != nullptr)
 		config.generalEmulation.hacks |= hack_LoadDepthTextures;
+	else if (strstr(RSP.romname, (const char *)"WIN BACK") != nullptr ||
+		strstr(RSP.romname, (const char *)"OPERATION WINBACK") != nullptr)
+		config.generalEmulation.hacks |= hack_WinBack;
+	else if (strstr(RSP.romname, (const char *)"POKEMON SNAP") != nullptr)
+		config.generalEmulation.hacks |= hack_Snap;
+	else if (strstr(RSP.romname, (const char *)"MARIOKART64") != nullptr)
+		config.generalEmulation.hacks |= hack_MK64;
+	else if (strstr(RSP.romname, (const char *)"Resident Evil II") ||
+			 strstr(RSP.romname, (const char *)"BioHazard II"))
+		config.generalEmulation.hacks |= hack_RE2 | hack_ModifyVertexXyInShader | hack_LoadDepthTextures;
 
 	api().FindPluginPath(RSP.pluginpath);
 

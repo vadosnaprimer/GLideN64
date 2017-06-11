@@ -2,6 +2,7 @@
 #define CONFIGDIALOG_H
 
 #include <QDialog>
+#include <QTreeWidgetItem>
 
 namespace Ui {
 class ConfigDialog;
@@ -13,7 +14,7 @@ class ConfigDialog : public QDialog
 	Q_OBJECT
 
 public:
-	explicit ConfigDialog(QWidget *parent = 0);
+	explicit ConfigDialog(QWidget *parent = Q_NULLPTR, Qt::WindowFlags f = Qt::WindowFlags());
 	~ConfigDialog();
 
 	void setIniPath(const QString & _strIniPath);
@@ -23,8 +24,6 @@ public Q_SLOTS:
 	virtual void accept();
 
 private slots:
-	void on_selectFontButton_clicked();
-
 	void on_PickFontColorButton_clicked();
 
 	void on_buttonBox_clicked(QAbstractButton *button);
@@ -33,11 +32,21 @@ private slots:
 
 	void on_texPackPathButton_clicked();
 
-	void on_fbInfoDisableCheckBox_toggled(bool checked);
-
 	void on_windowedResolutionComboBox_currentIndexChanged(int index);
 
-	void on_nativeRes2D_checkBox_toggled(bool checked);
+	void on_windowedResolutionComboBox_currentTextChanged(QString text);
+
+	void on_cropImageComboBox_currentIndexChanged(int index);
+
+	void on_frameBufferCheckBox_toggled(bool checked);
+	
+	void on_aliasingSlider_valueChanged(int value);
+
+	void on_fontTreeWidget_currentItemChanged(QTreeWidgetItem *current, QTreeWidgetItem *previous);
+
+	void on_fontSizeSpinBox_valueChanged(int value);
+
+	void on_tabWidget_currentChanged(int tab);
 
 private:
 	void _init();
@@ -47,6 +56,7 @@ private:
 	QFont m_font;
 	QColor m_color;
 	bool m_accepted;
+	bool m_fontsInited;
 	QString m_strIniPath;
 };
 

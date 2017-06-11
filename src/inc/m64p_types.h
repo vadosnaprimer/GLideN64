@@ -29,12 +29,12 @@
 
 /* necessary headers */
 #include <stdint.h>
-#if defined(WIN32)
+#if defined(_MSC_VER)
   #include <windows.h>
 #endif
 
 /* DLL handles and function declaration specifiers */
-#if defined(WIN32)
+#ifdef _MSC_VER
   #define IMPORT extern "C" __declspec(dllimport)
   #define EXPORT __declspec(dllexport)
   #define CALL   __cdecl

@@ -145,7 +145,7 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
     <_ProjectFileVersion>10.0.30319.1</_ProjectFileVersion>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(SolutionDir)..\..\..\..\output64\dll\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(SolutionDir)..\..\..\..\output\dll\</OutDir>
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug_mupenplus|Win32'">$(SolutionDir)..\..\..\..\output\dll\</OutDir>
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug_mupenplus_uniformset|Win32'">Debug\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Debug\</IntDir>
@@ -213,10 +213,10 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release_mupenplus|x64'">
     <TargetName>mupen64plus-video-GLideN64</TargetName>
-    <OutDir>$(SolutionDir)..\..\..\..\output64\dll\</OutDir>
+    <OutDir>$(SolutionDir)..\..\..\..\output\dll\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(SolutionDir)..\..\..\..\output64\dll\</OutDir>
+    <OutDir>$(SolutionDir)..\..\..\..\output\dll\</OutDir>
     <TargetName>mupen64plus-video-GLideN64</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">

@@ -17,7 +17,7 @@ struct CachedTexture
 	CachedTexture(graphics::ObjectHandle _name) : name(_name), max_level(0), frameBufferTexture(fbNone), bHDTexture(false) {}
 
 	graphics::ObjectHandle name;
-	u32		crc;
+	u32		crc = 0;
 //	float	fulS, fulT;
 //	WORD	ulS, ulT, lrS, lrT;
 	float	offsetS, offsetT;
@@ -64,7 +64,7 @@ struct TextureCache
 	static TextureCache & get();
 
 private:
-	TextureCache() : m_pDummy(nullptr), m_hits(0), m_misses(0), m_maxBytes(0), m_cachedBytes(0), m_curUnpackAlignment(4), m_toggleDumpTex(false)
+	TextureCache() : m_pDummy(nullptr), m_hits(0), m_misses(0), m_cachedBytes(0), m_curUnpackAlignment(4), m_toggleDumpTex(false)
 	{
 		current[0] = nullptr;
 		current[1] = nullptr;
@@ -97,6 +97,7 @@ private:
 	u32 m_cachedBytes;
 	s32 m_curUnpackAlignment;
 	bool m_toggleDumpTex;
+	const size_t m_maxCacheSize = 8000;
 };
 
 void getTextureShiftScale(u32 tile, const TextureCache & cache, f32 & shiftScaleS, f32 & shiftScaleT);

@@ -13,7 +13,8 @@
 #include "Combiner.h"
 #include "Types.h"
 #include "Config.h"
-#include "Debug.h"
+#include "Debugger.h"
+#include "DebugDump.h"
 #include "PostProcessor.h"
 #include "FrameBufferInfo.h"
 #include "Log.h"
@@ -181,7 +182,7 @@ void FrameBuffer::init(u32 _address, u16 _format, u16 _size, u16 _width, bool _c
 
 void FrameBuffer::updateEndAddress()
 {
-	const u32 height = max(1U, m_height - 1);
+	const u32 height = max(1U, m_height);
 	m_endAddress = min(RDRAMSize, m_startAddress + (((m_width * height) << m_size >> 1) - 1));
 }
 
@@ -234,6 +235,12 @@ void FrameBuffer::copyRdram()
 	}
 	m_RdramCopy.resize(dataSize);
 	memcpy(m_RdramCopy.data(), RDRAM + m_startAddress, dataSize);
+}
+
+void FrameBuffer::setDirty()
+{
+	m_cleared = false;
+	m_RdramCopy.clear();
 }
 
 bool FrameBuffer::isValid(bool _forceCheck) const
@@ -508,6 +515,29 @@ FrameBuffer * FrameBufferList::findBuffer(u32 _startAddress)
 	return nullptr;
 }
 
+FrameBuffer * FrameBufferList::getBuffer(u32 _startAddress)
+{
+	for (auto iter = m_list.begin(); iter != m_list.end(); ++iter) {
+		if (iter->m_startAddress == _startAddress)
+			return &(*iter);
+	}
+	return nullptr;
+}
+
+inline
+bool isOverlapping(const FrameBuffer * _buf1, const FrameBuffer * _buf2)
+{
+	if (_buf1->m_endAddress < _buf2->m_endAddress && _buf1->m_width == _buf2->m_width && _buf1->m_size == _buf2->m_size) {
+		const u32 diff = _buf1->m_endAddress - _buf2->m_startAddress + 1;
+		const u32 stride = _buf1->m_width << _buf1->m_size >> 1;
+		if ((diff % stride == 0) && (diff / stride < 5))
+			return true;
+		else
+			return false;
+	}
+	return false;
+}
+
 void FrameBufferList::removeIntersections()
 {
 	assert(!m_list.empty());
@@ -517,8 +547,17 @@ void FrameBufferList::removeIntersections()
 		--iter;
 		if (&(*iter) == m_pCurrent)
 			continue;
-		if ((iter->m_startAddress <= m_pCurrent->m_startAddress && iter->m_endAddress >= m_pCurrent->m_startAddress) || // [  {  ]
-			(m_pCurrent->m_startAddress <= iter->m_startAddress && m_pCurrent->m_endAddress >= iter->m_startAddress)) { // {  [  }
+		if (iter->m_startAddress <= m_pCurrent->m_startAddress && iter->m_endAddress >= m_pCurrent->m_startAddress) { // [  {  ]
+			if (isOverlapping(&(*iter), m_pCurrent)) {
+				iter->m_endAddress = m_pCurrent->m_startAddress - 1;
+				continue;
+			}
+			iter = m_list.erase(iter);
+		} else if (m_pCurrent->m_startAddress <= iter->m_startAddress && m_pCurrent->m_endAddress >= iter->m_startAddress) { // {  [  }
+			if (isOverlapping(m_pCurrent, &(*iter))) {
+				m_pCurrent->m_endAddress = iter->m_startAddress - 1;
+				continue;
+			}
 			iter = m_list.erase(iter);
 		}
 	} while (iter != m_list.begin());
@@ -635,11 +674,7 @@ void FrameBufferList::saveBuffer(u32 _address, u16 _format, u16 _size, u16 _widt
 	else
 		attachDepthBuffer();
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "FrameBuffer_SaveBuffer( 0x%08X ); depth buffer is 0x%08X\n",
-		address, (depthBuffer.top != nullptr && depthBuffer.top->renderbuf > 0) ? depthBuffer.top->address : 0
-	);
-#endif
+	DebugMsg( DEBUG_NORMAL, "FrameBuffer_SaveBuffer( 0x%08X )\n", _address);
 
 	if (m_pCurrent->isAuxiliary() &&
 		m_pCurrent->m_pDepthBuffer != nullptr &&
@@ -801,8 +836,7 @@ void FrameBufferList::_renderScreenSizeBuffer()
 	GraphicsDrawer & drawer = wnd.getDrawer();
 	FrameBuffer *pBuffer = &m_list.back();
 	PostProcessor & postProcessor = PostProcessor::get();
-	FrameBuffer * pFilteredBuffer = postProcessor.doBlur(postProcessor.doGammaCorrection(
-		postProcessor.doOrientationCorrection(pBuffer)));
+	FrameBuffer * pFilteredBuffer = postProcessor.doGammaCorrection(postProcessor.doOrientationCorrection(pBuffer));
 	CachedTexture * pBufferTexture = pFilteredBuffer->m_pTexture;
 
 
@@ -990,6 +1024,11 @@ void FrameBufferList::renderBuffer()
 	if (VI.width == 0 || *REG.VI_WIDTH == 0 || *REG.VI_H_START == 0) // H width is zero. Don't draw
 		return;
 
+	if (g_debugger.isDebugMode()) {
+		g_debugger.draw();
+		return;
+	}
+
 	if (config.frameBufferEmulation.enable == 0) {
 		_renderScreenSizeBuffer();
 		return;
@@ -1055,8 +1094,7 @@ void FrameBufferList::renderBuffer()
 		srcY1 = srcY0 + srcHeight;
 	}
 	PostProcessor & postProcessor = PostProcessor::get();
-	FrameBuffer * pFilteredBuffer = postProcessor.doBlur(postProcessor.doGammaCorrection(
-		postProcessor.doOrientationCorrection(pBuffer)));
+	FrameBuffer * pFilteredBuffer = postProcessor.doGammaCorrection(postProcessor.doOrientationCorrection(pBuffer));
 
 	if (rdpRes.vi_fsaa && rdpRes.vi_divot)
 		Xdivot = 1;
@@ -1132,8 +1170,7 @@ void FrameBufferList::renderBuffer()
 
 	if (pNextBuffer != nullptr) {
 		pNextBuffer->m_isMainBuffer = true;
-		pFilteredBuffer = postProcessor.doBlur(postProcessor.doGammaCorrection(
-			postProcessor.doOrientationCorrection(pNextBuffer)));
+		pFilteredBuffer = postProcessor.doGammaCorrection(postProcessor.doOrientationCorrection(pNextBuffer));
 		srcY1 = srcPartHeight;
 		dstY0 = dstY1;
 		dstY1 = dstY0 + dstPartHeight;
@@ -1169,6 +1206,13 @@ void FrameBufferList::renderBuffer()
 	if (m_pCurrent != nullptr) {
 		gfxContext.bindFramebuffer(bufferTarget::DRAW_FRAMEBUFFER, m_pCurrent->m_FBO);
 	}
+
+	const s32 X = hOffset;
+	const s32 Y = wnd.getHeightOffset();
+	const s32 W = wnd.getWidth();
+	const s32 H = wnd.getHeight();
+
+	gfxContext.setScissor(X, Y, W, H);
 	gDP.changed |= CHANGED_SCISSOR;
 }
 
@@ -1201,8 +1245,9 @@ void FrameBufferList::fillRDRAM(s32 ulx, s32 uly, s32 lrx, s32 lry)
 	m_pCurrent->setBufferClearParams(gDP.fillColor.color, ulx, uly, lrx, lry);
 }
 
-void FrameBuffer_ActivateBufferTexture(u32 t, FrameBuffer *pBuffer)
+void FrameBuffer_ActivateBufferTexture(u32 t, u32 _frameBufferAddress)
 {
+	FrameBuffer * pBuffer = frameBufferList().getBuffer(_frameBufferAddress);
 	if (pBuffer == nullptr)
 		return;
 
@@ -1215,8 +1260,9 @@ void FrameBuffer_ActivateBufferTexture(u32 t, FrameBuffer *pBuffer)
 	gDP.changed |= CHANGED_FB_TEXTURE;
 }
 
-void FrameBuffer_ActivateBufferTextureBG(u32 t, FrameBuffer *pBuffer )
+void FrameBuffer_ActivateBufferTextureBG(u32 t, u32 _frameBufferAddress)
 {
+	FrameBuffer * pBuffer = frameBufferList().getBuffer(_frameBufferAddress);
 	if (pBuffer == nullptr)
 		return;
 

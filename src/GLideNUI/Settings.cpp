@@ -35,7 +35,6 @@ void _loadSettings(QSettings & settings)
 	settings.beginGroup("texture");
 	config.texture.maxAnisotropy = settings.value("maxAnisotropy", config.texture.maxAnisotropy).toInt();
 	config.texture.bilinearMode = settings.value("bilinearMode", config.texture.bilinearMode).toInt();
-	config.texture.maxBytes = settings.value("maxBytes", config.texture.maxBytes).toInt();
 	config.texture.screenShotFormat = settings.value("screenShotFormat", config.texture.screenShotFormat).toInt();
 	settings.endGroup();
 
@@ -97,14 +96,6 @@ void _loadSettings(QSettings & settings)
 	config.font.colorf[3] = config.font.color[3] == 0 ? 1.0f : _FIXED2FLOAT(config.font.color[3], 8);
 	settings.endGroup();
 
-	settings.beginGroup("bloomFilter");
-	config.bloomFilter.enable = settings.value("enable", config.bloomFilter.enable).toInt();
-	config.bloomFilter.thresholdLevel = settings.value("thresholdLevel", config.bloomFilter.thresholdLevel).toInt();
-	config.bloomFilter.blendMode = settings.value("blendMode", config.bloomFilter.blendMode).toInt();
-	config.bloomFilter.blurAmount = settings.value("blurAmount", config.bloomFilter.blurAmount).toInt();
-	config.bloomFilter.blurStrength = settings.value("blurStrength", config.bloomFilter.blurStrength).toInt();
-	settings.endGroup();
-
 	settings.beginGroup("gammaCorrection");
 	config.gammaCorrection.force = settings.value("force", config.gammaCorrection.force).toInt();
 	config.gammaCorrection.level = settings.value("level", config.gammaCorrection.level).toFloat();
@@ -115,6 +106,10 @@ void _loadSettings(QSettings & settings)
 	config.onScreenDisplay.vis = settings.value("showVIS", config.onScreenDisplay.vis).toInt();
 	config.onScreenDisplay.percent = settings.value("showPercent", config.onScreenDisplay.percent).toInt();
 	config.onScreenDisplay.pos = settings.value("osdPos", config.onScreenDisplay.pos).toInt();
+	settings.endGroup();
+
+	settings.beginGroup("debug");
+	config.debug.dumpMode = settings.value("dumpMode", config.debug.dumpMode).toInt();
 	settings.endGroup();
 }
 
@@ -162,7 +157,6 @@ void writeSettings(const QString & _strIniFolder)
 	settings.beginGroup("texture");
 	settings.setValue("maxAnisotropy", config.texture.maxAnisotropy);
 	settings.setValue("bilinearMode", config.texture.bilinearMode);
-	settings.setValue("maxBytes", config.texture.maxBytes);
 	settings.setValue("screenShotFormat", config.texture.screenShotFormat);
 	settings.endGroup();
 
@@ -213,14 +207,6 @@ void writeSettings(const QString & _strIniFolder)
 	settings.setValue("color", QColor(config.font.color[0], config.font.color[1], config.font.color[2], config.font.color[3]));
 	settings.endGroup();
 
-	settings.beginGroup("bloomFilter");
-	settings.setValue("enable", config.bloomFilter.enable);
-	settings.setValue("thresholdLevel", config.bloomFilter.thresholdLevel);
-	settings.setValue("blendMode", config.bloomFilter.blendMode);
-	settings.setValue("blurAmount", config.bloomFilter.blurAmount);
-	settings.setValue("blurStrength", config.bloomFilter.blurStrength);
-	settings.endGroup();
-
 	settings.beginGroup("gammaCorrection");
 	settings.setValue("force", config.gammaCorrection.force);
 	settings.setValue("level", config.gammaCorrection.level);
@@ -231,6 +217,10 @@ void writeSettings(const QString & _strIniFolder)
 	settings.setValue("showVIS", config.onScreenDisplay.vis);
 	settings.setValue("showPercent", config.onScreenDisplay.percent);
 	settings.setValue("osdPos", config.onScreenDisplay.pos);
+	settings.endGroup();
+
+	settings.beginGroup("debug");
+	settings.setValue("dumpMode", config.debug.dumpMode);
 	settings.endGroup();
 }
 

@@ -9,7 +9,7 @@
 #include "gDP.h"
 #include "gSP.h"
 #include "Types.h"
-#include "Debug.h"
+#include "DebugDump.h"
 #include "convert.h"
 #include "CRC.h"
 #include "FrameBuffer.h"
@@ -34,12 +34,12 @@ void gDPSetOtherMode( u32 mode0, u32 mode1 )
 
 	gDP.changed |= CHANGED_RENDERMODE | CHANGED_CYCLETYPE | CHANGED_ALPHACOMPARE;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPSetOtherMode( %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s, %s | %s | %s%s%s%s%s | %s | %s%s%s );\n",
+#ifdef DEBUG_DUMP
+	DebugMsg( DEBUG_NORMAL, "gDPSetOtherMode( %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s, %s | %s | %s%s%s%s%s | %s | %s%s%s );\n",
 		AlphaDitherText[gDP.otherMode.alphaDither],
 		ColorDitherText[gDP.otherMode.colorDither],
 		CombineKeyText[gDP.otherMode.combineKey],
-		TextureConvertText[gDP.otherMode.textureConvert],
+		TextureConvertText[gDP.otherMode.convert_one | (gDP.otherMode.bi_lerp1 << 1) | (gDP.otherMode.bi_lerp0 << 2)],
 		TextureFilterText[gDP.otherMode.textureFilter],
 		TextureLUTText[gDP.otherMode.textureLUT],
 		TextureLODText[gDP.otherMode.textureLOD],
@@ -69,20 +69,15 @@ void gDPSetPrimDepth( u16 z, u16 dz )
 		gDP.primDepth.z = min(1.0f, max(-1.0f, (_FIXED2FLOAT(_SHIFTR(z, 0, 15), 15) - gSP.viewport.vtrans[2]) / gSP.viewport.vscale[2]));
 	gDP.primDepth.deltaZ = _FIXED2FLOAT(_SHIFTR(dz, 0, 15), 15);
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPSetPrimDepth( %f, %f );\n",
-		gDP.primDepth.z,
-		gDP.primDepth.deltaZ);
-#endif
+	DebugMsg( DEBUG_NORMAL, "gDPSetPrimDepth( %f, %f );\n", gDP.primDepth.z, gDP.primDepth.deltaZ);
 }
 
 void gDPSetTexturePersp( u32 enable )
 {
 	gDP.otherMode.texturePersp = enable & 1;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_TEXTURE, "gDPSetTexturePersp( %s );\n",
-		TexturePerspText[gDP.otherMode.texturePersp] );
+#ifdef DEBUG_DUMP
+	DebugMsg( DEBUG_NORMAL, "gDPSetTexturePersp( %s );\n", TexturePerspText[gDP.otherMode.texturePersp] );
 #endif
 }
 
@@ -90,9 +85,8 @@ void gDPSetTextureLUT( u32 mode )
 {
 	gDP.otherMode.textureLUT = mode & 3;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_TEXTURE, "gDPSetTextureLUT( %s );\n",
-		TextureLUTText[gDP.otherMode.textureLUT] );
+#ifdef DEBUG_DUMP
+	DebugMsg( DEBUG_NORMAL, "gDPSetTextureLUT( %s );\n", TextureLUTText[gDP.otherMode.textureLUT] );
 #endif
 }
 
@@ -103,8 +97,9 @@ void gDPSetCombine( s32 muxs0, s32 muxs1 )
 
 	gDP.changed |= CHANGED_COMBINE;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_COMBINE, "gDPSetCombine( %s, %s, %s, %s, %s, %s, %s, %s,\n",
+	DebugMsg(DEBUG_NORMAL, "gDPSetCombine\n");
+#ifdef DEBUG_DUMP
+	DebugMsg( DEBUG_NORMAL, "	%s, %s, %s, %s, %s, %s, %s, %s,\n",
 		saRGBText[gDP.combine.saRGB0],
 		sbRGBText[gDP.combine.sbRGB0],
 		mRGBText[gDP.combine.mRGB0],
@@ -114,7 +109,7 @@ void gDPSetCombine( s32 muxs0, s32 muxs1 )
 		mAText[gDP.combine.mA0],
 		aAText[gDP.combine.aA0] );
 
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_COMBINE, "               %s, %s, %s, %s, %s, %s, %s, %s );\n",
+	DebugMsg( DEBUG_NORMAL, "	%s, %s, %s, %s, %s, %s, %s, %s );\n",
 		saRGBText[gDP.combine.saRGB1],
 		sbRGBText[gDP.combine.sbRGB1],
 		mRGBText[gDP.combine.mRGB1],
@@ -123,7 +118,6 @@ void gDPSetCombine( s32 muxs0, s32 muxs1 )
 		sbAText[gDP.combine.sbA1],
 		mAText[gDP.combine.mA1],
 		aAText[gDP.combine.aA1] );
-
 #endif
 }
 
@@ -131,9 +125,7 @@ void gDPSetColorImage( u32 format, u32 size, u32 width, u32 address )
 {
 	address = RSP_SegmentToPhysical( address );
 
-	if (gDP.colorImage.address != address || gDP.colorImage.width != width || gDP.colorImage.size != size) {
-		frameBufferList().saveBuffer(address, (u16)format, (u16)size, (u16)width, false);
-	}
+	frameBufferList().saveBuffer(address, (u16)format, (u16)size, (u16)width, false);
 
 	gDP.colorImage.format = format;
 	gDP.colorImage.size = size;
@@ -141,8 +133,8 @@ void gDPSetColorImage( u32 format, u32 size, u32 width, u32 address )
 	gDP.colorImage.height = 0;
 	gDP.colorImage.address = address;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPSetColorImage( %s, %s, %i, 0x%08X );\n",
+#ifdef DEBUG_DUMP
+	DebugMsg( DEBUG_NORMAL, "gDPSetColorImage( %s, %s, %i, 0x%08X );\n",
 		ImageFormatText[gDP.colorImage.format],
 		ImageSizeText[gDP.colorImage.size],
 		gDP.colorImage.width,
@@ -168,8 +160,8 @@ void gDPSetTextureImage(u32 format, u32 size, u32 width, u32 address)
 			gSP.DMAOffsets.tex_count = 0;
 		}
 	}
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_TEXTURE, "gDPSetTextureImage( %s, %s, %i, 0x%08X );\n",
+#ifdef DEBUG_DUMP
+	DebugMsg( DEBUG_NORMAL, "gDPSetTextureImage( %s, %s, %i, 0x%08X );\n",
 		ImageFormatText[gDP.textureImage.format],
 		ImageSizeText[gDP.textureImage.size],
 		gDP.textureImage.width,
@@ -183,9 +175,7 @@ void gDPSetDepthImage( u32 address )
 	gDP.depthImageAddress = address;
 	depthBufferList().saveBuffer(address);
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPSetDepthImage( 0x%08X );\n", gDP.depthImageAddress );
-#endif
+	DebugMsg( DEBUG_NORMAL, "gDPSetDepthImage( 0x%08X );\n", gDP.depthImageAddress );
 }
 
 void gDPSetEnvColor( u32 r, u32 g, u32 b, u32 a )
@@ -195,10 +185,7 @@ void gDPSetEnvColor( u32 r, u32 g, u32 b, u32 a )
 	gDP.envColor.b = b * 0.0039215689f;
 	gDP.envColor.a = a * 0.0039215689f;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_COMBINE, "gDPSetEnvColor( %i, %i, %i, %i );\n",
-		r, g, b, a );
-#endif
+	DebugMsg( DEBUG_NORMAL, "gDPSetEnvColor( %i, %i, %i, %i );\n", r, g, b, a );
 }
 
 void gDPSetBlendColor( u32 r, u32 g, u32 b, u32 a )
@@ -209,10 +196,8 @@ void gDPSetBlendColor( u32 r, u32 g, u32 b, u32 a )
 	gDP.blendColor.a = a * 0.0039215689f;
 
 	gDP.changed |= CHANGED_BLENDCOLOR;
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPSetBlendColor( %i, %i, %i, %i );\n",
-		r, g, b, a );
-#endif
+
+	DebugMsg( DEBUG_NORMAL, "gDPSetBlendColor( %i, %i, %i, %i );\n", r, g, b, a );
 }
 
 void gDPSetFogColor( u32 r, u32 g, u32 b, u32 a )
@@ -224,10 +209,7 @@ void gDPSetFogColor( u32 r, u32 g, u32 b, u32 a )
 
 	gDP.changed |= CHANGED_FOGCOLOR;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPSetFogColor( %i, %i, %i, %i );\n",
-		r, g, b, a );
-#endif
+	DebugMsg( DEBUG_NORMAL, "gDPSetFogColor( %i, %i, %i, %i );\n", r, g, b, a );
 }
 
 void gDPSetFillColor( u32 c )
@@ -236,9 +218,7 @@ void gDPSetFillColor( u32 c )
 	gDP.fillColor.z = (f32)_SHIFTR( c,  2, 14 );
 	gDP.fillColor.dz = (f32)_SHIFTR( c, 0, 2 );
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPSetFillColor( 0x%08X );\n", c );
-#endif
+	DebugMsg( DEBUG_NORMAL, "gDPSetFillColor( 0x%08X );\n", c );
 }
 
 void gDPGetFillColor(f32 _fillColor[4])
@@ -266,10 +246,7 @@ void gDPSetPrimColor( u32 m, u32 l, u32 r, u32 g, u32 b, u32 a )
 	gDP.primColor.b = b * 0.0039215689f;
 	gDP.primColor.a = a * 0.0039215689f;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_COMBINE, "gDPSetPrimColor( %i, %i, %i, %i, %i, %i );\n",
-		m, l, r, g, b, a );
-#endif
+	DebugMsg( DEBUG_NORMAL, "gDPSetPrimColor( %i, %i, %i, %i, %i, %i );\n", m, l, r, g, b, a );
 }
 
 void gDPSetTile( u32 format, u32 size, u32 line, u32 tmem, u32 tile, u32 palette, u32 cmt, u32 cms, u32 maskt, u32 masks, u32 shiftt, u32 shifts )
@@ -296,15 +273,15 @@ void gDPSetTile( u32 format, u32 size, u32 line, u32 tmem, u32 tile, u32 palette
 		if (nTile > gSP.texture.tile + 1) {
 			gDP.tiles[tile].textureMode = gDP.tiles[nTile].textureMode;
 			gDP.tiles[tile].loadType = gDP.tiles[nTile].loadType;
-			gDP.tiles[tile].frameBuffer = gDP.tiles[nTile].frameBuffer;
+			gDP.tiles[tile].frameBufferAddress = gDP.tiles[nTile].frameBufferAddress;
 			gDP.tiles[tile].imageAddress = gDP.tiles[nTile].imageAddress;
 		}
 	}
 
 	gDP.changed |= CHANGED_TILE;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_TEXTURE, "gDPSetTile( %s, %s, %i, %i, %i, %i, %s%s, %s%s, %i, %i, %i, %i );\n",
+#ifdef DEBUG_DUMP
+	DebugMsg( DEBUG_NORMAL, "gDPSetTile( %s, %s, %i, %i, %i, %i, %s%s, %s%s, %i, %i, %i, %i );\n",
 		ImageFormatText[format],
 		ImageSizeText[size],
 		line,
@@ -337,21 +314,19 @@ void gDPSetTileSize( u32 tile, u32 uls, u32 ult, u32 lrs, u32 lrt )
 
 	gDP.changed |= CHANGED_TILE;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_TEXTURE, "gDPSetTileSize( %i, %.2f, %.2f, %.2f, %.2f );\n",
+	DebugMsg( DEBUG_NORMAL, "gDPSetTileSize( %i, %.2f, %.2f, %.2f, %.2f );\n",
 		tile,
 		gDP.tiles[tile].fuls,
 		gDP.tiles[tile].fult,
 		gDP.tiles[tile].flrs,
 		gDP.tiles[tile].flrt );
-#endif
 }
 
 static
 bool CheckForFrameBufferTexture(u32 _address, u32 _bytes)
 {
 	gDP.loadTile->textureMode = TEXTUREMODE_NORMAL;
-	gDP.loadTile->frameBuffer = nullptr;
+	gDP.loadTile->frameBufferAddress = 0U;
 	gDP.changed |= CHANGED_TMEM;
 	if (!config.frameBufferEmulation.enable)
 		return false;
@@ -375,7 +350,7 @@ bool CheckForFrameBufferTexture(u32 _address, u32 _bytes)
 			bRes = false;
 		}
 
-		if ((config.generalEmulation.hacks & hack_noDepthFrameBuffers) != 0 && pBuffer->m_isDepthBuffer) {
+		if (pBuffer->m_isDepthBuffer && (pBuffer->isAuxiliary() || (config.generalEmulation.hacks & hack_noDepthFrameBuffers) != 0)) {
 			fbList.removeBuffer(pBuffer->m_startAddress);
 			bRes = false;
 		}
@@ -401,7 +376,7 @@ bool CheckForFrameBufferTexture(u32 _address, u32 _bytes)
 			pBuffer->m_loadType = gDP.loadTile->loadType;
 			pBuffer->m_loadTileOrigin.uls = gDP.loadTile->uls;
 			pBuffer->m_loadTileOrigin.ult = gDP.loadTile->ult;
-			gDP.loadTile->frameBuffer = pBuffer;
+			gDP.loadTile->frameBufferAddress = pBuffer->m_startAddress;
 			gDP.loadTile->textureMode = TEXTUREMODE_FRAMEBUFFER;
 		}
 	}
@@ -411,7 +386,7 @@ bool CheckForFrameBufferTexture(u32 _address, u32 _bytes)
 			gDPTile & curTile = gDP.tiles[nTile];
 			curTile.textureMode = gDP.loadTile->textureMode;
 			curTile.loadType = gDP.loadTile->loadType;
-			curTile.frameBuffer = gDP.loadTile->frameBuffer;
+			curTile.frameBufferAddress = gDP.loadTile->frameBufferAddress;
 			curTile.imageAddress = gDP.loadTile->imageAddress;
 		}
 	}
@@ -465,7 +440,9 @@ void gDPLoadTile(u32 tile, u32 uls, u32 ult, u32 lrs, u32 lrt)
 	info.texAddress = gDP.loadTile->imageAddress;
 	info.uls = gDP.loadTile->uls;
 	info.ult = gDP.loadTile->ult;
-	info.width = gDP.loadTile->masks != 0 ? (u16)min(width, 1U<<gDP.loadTile->masks) : (u16)width;
+	info.lrs = gDP.loadTile->lrs;
+	info.lrt = gDP.loadTile->lrt;
+	info.width = gDP.loadTile->masks != 0 ? (u16)min(width, 1U << gDP.loadTile->masks) : (u16)width;
 	info.height = gDP.loadTile->maskt != 0 ? (u16)min(height, 1U<<gDP.loadTile->maskt) : (u16)height;
 	info.texWidth = gDP.textureImage.width;
 	info.size = gDP.textureImage.size;
@@ -503,10 +480,9 @@ void gDPLoadTile(u32 tile, u32 uls, u32 ult, u32 lrs, u32 lrt)
 			tmemAddr += line;
 		}
 	}
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_TEXTURE, "gDPLoadTile( %i, %i, %i, %i, %i );\n",
+
+	DebugMsg( DEBUG_NORMAL, "gDPLoadTile( %i, %i, %i, %i, %i );\n",
 			tile, gDP.loadTile->uls, gDP.loadTile->ult, gDP.loadTile->lrs, gDP.loadTile->lrt );
-#endif
 }
 
 //****************************************************************
@@ -580,6 +556,10 @@ void gDPLoadBlock(u32 tile, u32 uls, u32 ult, u32 lrs, u32 dxt)
 
 	gDPLoadTileInfo &info = gDP.loadInfo[gDP.loadTile->tmem];
 	info.texAddress = gDP.loadTile->imageAddress;
+	info.uls = gDP.loadTile->uls;
+	info.ult = gDP.loadTile->ult;
+	info.lrs = gDP.loadTile->lrs;
+	info.lrt = gDP.loadTile->lrt;
 	info.width = gDP.loadTile->lrs;
 	info.dxt = dxt;
 	info.size = gDP.textureImage.size;
@@ -593,15 +573,12 @@ void gDPLoadBlock(u32 tile, u32 uls, u32 ult, u32 lrs, u32 dxt)
 	u32 address = gDP.textureImage.address + ult * gDP.textureImage.bpl + (uls << gDP.textureImage.size >> 1);
 
 	if (bytes == 0 || (address + bytes) > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR | DEBUG_TEXTURE, "// Attempting to load texture block out of range\n" );
-		DebugMsg(DEBUG_HIGH | DEBUG_HANDLED | DEBUG_TEXTURE, "gDPLoadBlock( %i, %i, %i, %i, %i );\n",
-			tile, uls, ult, lrs, dxt );
-#endif
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to load texture block out of range\n");
+		DebugMsg(DEBUG_NORMAL, "gDPLoadBlock( %i, %i, %i, %i, %i );\n", tile, uls, ult, lrs, dxt );
 		return;
 	}
 
-	gDP.loadTile->frameBuffer = nullptr;
+	gDP.loadTile->frameBufferAddress = 0;
 	CheckForFrameBufferTexture(address, bytes); // Load data to TMEM even if FB texture is found. See comment to texturedRectDepthBufferCopy
 
 	if (gDP.loadTile->size == G_IM_SIZ_32b)
@@ -638,32 +615,37 @@ void gDPLoadBlock(u32 tile, u32 uls, u32 ult, u32 lrs, u32 dxt)
 				DWordInterleaveWrap((u32*)TMEM, tmemAddr << 1, 0x3FF, line);
 		}
 	}
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_TEXTURE, "gDPLoadBlock( %i, %i, %i, %i, %i );\n",
-		tile, uls, ult, lrs, dxt );
-#endif
+
+	DebugMsg( DEBUG_NORMAL, "gDPLoadBlock( %i, %i, %i, %i, %i );\n", tile, uls, ult, lrs, dxt );
 }
 
 void gDPLoadTLUT( u32 tile, u32 uls, u32 ult, u32 lrs, u32 lrt )
 {
 	gDPSetTileSize( tile, uls, ult, lrs, lrt );
-	if (gDP.tiles[tile].tmem < 256)
+	if (gDP.tiles[tile].tmem < 256) {
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "gDPLoadTLUT wrong tile tmem addr: tile[%d].tmem=%04x;\n", tile, gDP.tiles[tile].tmem);
 		return;
-	const u16 count = (u16)((gDP.tiles[tile].lrs - gDP.tiles[tile].uls + 1) * (gDP.tiles[tile].lrt - gDP.tiles[tile].ult + 1));
+	}
+	u16 count = (u16)((gDP.tiles[tile].lrs - gDP.tiles[tile].uls + 1) * (gDP.tiles[tile].lrt - gDP.tiles[tile].ult + 1));
 	u32 address = gDP.textureImage.address + gDP.tiles[tile].ult * gDP.textureImage.bpl + (gDP.tiles[tile].uls << gDP.textureImage.size >> 1);
 	u16 pal = (u16)((gDP.tiles[tile].tmem - 256) >> 4);
 	u16 *dest = (u16*)&TMEM[gDP.tiles[tile].tmem];
+	
+	// Workaround for possible game/emulator bug (see bug #1250)
+	if (pal != 0)
+		count = 16;
 
 	int i = 0;
+	u32 destIdx = 0;
 	while (i < count) {
 		for (u16 j = 0; (j < 16) && (i < count); ++j, ++i) {
-			*dest = swapword(*(u16*)(RDRAM + (address ^ 2)));
+			dest[destIdx&0x3FF] = swapword(*(u16*)(RDRAM + (address ^ 2)));
 			address += 2;
-			dest += 4;
+			destIdx += 4;
 		}
 
 		gDP.paletteCRC16[pal] = CRC_CalculatePalette(0xFFFFFFFF, &TMEM[256 + (pal << 4)], 16);
-		++pal;
+		pal = (pal + 1) & 0x0F;
 	}
 
 	gDP.paletteCRC256 = CRC_Calculate(0xFFFFFFFF, gDP.paletteCRC16, 64);
@@ -676,10 +658,8 @@ void gDPLoadTLUT( u32 tile, u32 uls, u32 ult, u32 lrs, u32 lrt )
 
 	gDP.changed |= CHANGED_TMEM;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_TEXTURE, "gDPLoadTLUT( %i, %i, %i, %i, %i );\n",
+	DebugMsg( DEBUG_NORMAL, "gDPLoadTLUT( %i, %i, %i, %i, %i );\n",
 		tile, gDP.tiles[tile].uls, gDP.tiles[tile].ult, gDP.tiles[tile].lrs, gDP.tiles[tile].lrt );
-#endif
 }
 
 void gDPSetScissor( u32 mode, f32 ulx, f32 uly, f32 lrx, f32 lry )
@@ -703,8 +683,8 @@ void gDPSetScissor( u32 mode, f32 ulx, f32 uly, f32 lrx, f32 lry )
 		}
 	}
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_IGNORED, "gDPSetScissor( %s, %.2f, %.2f, %.2f, %.2f );\n",
+#ifdef DEBUG_DUMP
+	DebugMsg( DEBUG_NORMAL, "gDPSetScissor( %s, %.2f, %.2f, %.2f, %.2f );\n",
 		ScissorModeText[gDP.scissor.mode],
 		gDP.scissor.ulx,
 		gDP.scissor.uly,
@@ -780,24 +760,22 @@ void gDPFillRectangle( s32 ulx, s32 uly, s32 lrx, s32 lry )
 
 	frameBufferList().setBufferChanged(lry);
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPFillRectangle( %i, %i, %i, %i );\n",
-		ulx, uly, lrx, lry );
-#endif
+	DebugMsg( DEBUG_NORMAL, "gDPFillRectangle( %i, %i, %i, %i );\n", ulx, uly, lrx, lry );
 }
 
 void gDPSetConvert( s32 k0, s32 k1, s32 k2, s32 k3, s32 k4, s32 k5 )
 {
 // angrylion's macro
-#define SRA(exp, sa)    ((signed)(exp) >> (sa))
-#define SIGN(i, b)      SRA((i) << (32 - (b)), (32 - (b)))
+#define SIGN(x, numb)	(((x) & ((1 << numb) - 1)) | -((x) & (1 << (numb - 1))))
 
-	gDP.convert.k0 = SIGN(k0, 9);
-	gDP.convert.k1 = SIGN(k1, 9);
-	gDP.convert.k2 = SIGN(k2, 9);
-	gDP.convert.k3 = SIGN(k3, 9);
-	gDP.convert.k4 = SIGN(k4, 9);
-	gDP.convert.k5 = SIGN(k5, 9);
+	gDP.convert.k0 = (SIGN(k0, 9) << 1) + 1;
+	gDP.convert.k1 = (SIGN(k1, 9) << 1) + 1;
+	gDP.convert.k2 = (SIGN(k2, 9) << 1) + 1;
+	gDP.convert.k3 = (SIGN(k3, 9) << 1) + 1;
+	gDP.convert.k4 = k4;
+	gDP.convert.k5 = k5;
+
+	DebugMsg( DEBUG_NORMAL, "gDPSetConvert( %i, %i, %i, %i, %i, %i );\n", k0, k1, k2, k3, k4, k5);
 }
 
 void gDPSetKeyR( u32 cR, u32 sR, u32 wR )
@@ -805,6 +783,7 @@ void gDPSetKeyR( u32 cR, u32 sR, u32 wR )
 	gDP.key.center.r = cR * 0.0039215689f;
 	gDP.key.scale.r = sR * 0.0039215689f;
 	gDP.key.width.r = wR * 0.0039215689f;
+	DebugMsg( DEBUG_NORMAL, "gDPSetKeyR( %u, %u, %u );\n", cR, sR, wR );
 }
 
 void gDPSetKeyGB(u32 cG, u32 sG, u32 wG, u32 cB, u32 sB, u32 wB )
@@ -815,6 +794,8 @@ void gDPSetKeyGB(u32 cG, u32 sG, u32 wG, u32 cB, u32 sB, u32 wB )
 	gDP.key.center.b = cB * 0.0039215689f;
 	gDP.key.scale.b = sB * 0.0039215689f;
 	gDP.key.width.b = wB * 0.0039215689f;
+	DebugMsg( DEBUG_NORMAL, "gDPSetKeyGB( %u, %u, %u, %u, %u, %u );\n",
+			  cG, sG, wG, cB, sB, wB );
 }
 
 void gDPTextureRectangle(f32 ulx, f32 uly, f32 lrx, f32 lry, s32 tile, f32 s, f32 t, f32 dsdx, f32 dtdy , bool flip)
@@ -847,7 +828,8 @@ void gDPTextureRectangle(f32 ulx, f32 uly, f32 lrx, f32 lry, s32 tile, f32 s, f3
 
 	gDP.rectColor = gDPInfo::Color();
 	if (gDP.otherMode.cycleType < G_CYC_COPY) {
-		if (gDP.combine.mA0 == G_ACMUX_0 && gDP.combine.aA0 == G_ACMUX_SHADE)
+		if ((config.generalEmulation.hacks & hack_texrect_shade_alpha) != 0 &&
+			gDP.combine.mA0 == G_ACMUX_0 && gDP.combine.aA0 == G_ACMUX_SHADE)
 			gDP.rectColor.a = 1.0f;
 	}
 
@@ -863,14 +845,12 @@ void gDPTextureRectangle(f32 ulx, f32 uly, f32 lrx, f32 lry, s32 tile, f32 s, f3
 
 	frameBufferList().setBufferChanged(lry);
 
-#ifdef DEBUG
 	if (flip)
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPTextureRectangleFlip( %f, %f, %f, %f, %i, %f, %f, %f, %f);\n",
+		DebugMsg( DEBUG_NORMAL, "gDPTextureRectangleFlip( %f, %f, %f, %f, %i, %f, %f, %f, %f);\n",
 				  ulx, uly, lrx, lry, tile, s, t, dsdx, dtdy );
 	else
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPTextureRectangle( %f, %f, %f, %f, %i, %i, %f, %f, %f, %f );\n",
+		DebugMsg( DEBUG_NORMAL, "gDPTextureRectangle( %f, %f, %f, %f, %i, %i, %f, %f, %f, %f );\n",
 				  ulx, uly, lrx, lry, tile, s, t, dsdx, dtdy );
-#endif
 }
 
 void gDPFullSync()
@@ -890,48 +870,36 @@ void gDPFullSync()
 	)
 		FrameBuffer_CopyToRDRAM(gDP.colorImage.address, sync);
 
-	if (RSP.bLLE) {
+	if (RSP.LLE) {
 		if (config.frameBufferEmulation.copyDepthToRDRAM != Config::cdDisable && !FBInfo::fbInfo.isSupported())
 			FrameBuffer_CopyDepthBuffer(gDP.colorImage.address);
 	}
-
-	perf.increaseFramesCount();
 
 	*REG.MI_INTR |= MI_INTR_DP;
 
 	CheckInterrupts();
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPFullSync();\n" );
-#endif
+	DebugMsg( DEBUG_NORMAL, "gDPFullSync();\n" );
 }
 
 void gDPTileSync()
 {
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_IGNORED | DEBUG_TEXTURE, "gDPTileSync();\n" );
-#endif
+	DebugMsg( DEBUG_NORMAL | DEBUG_IGNORED, "gDPTileSync();\n" );
 }
 
 void gDPPipeSync()
 {
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_IGNORED, "gDPPipeSync();\n" );
-#endif
+	DebugMsg( DEBUG_NORMAL | DEBUG_IGNORED, "gDPPipeSync();\n" );
 }
 
 void gDPLoadSync()
 {
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_IGNORED, "gDPLoadSync();\n" );
-#endif
+	DebugMsg( DEBUG_NORMAL | DEBUG_IGNORED, "gDPLoadSync();\n" );
 }
 
 void gDPNoOp()
 {
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_IGNORED, "gDPNoOp();\n" );
-#endif
+	DebugMsg( DEBUG_NORMAL | DEBUG_IGNORED, "gDPNoOp();\n" );
 }
 
 /*******************************************
@@ -1236,6 +1204,9 @@ void gDPLLETriangle(u32 _w1, u32 _w2, int _shade, int _texture, int _zbuffer, u3
 	drawer.drawScreenSpaceTriangle(vtx - vtx0);
 	gSP.textureTile[0] = textureTileOrg[0];
 	gSP.textureTile[1] = textureTileOrg[1];
+
+	DebugMsg( DEBUG_NORMAL, "gDPLLETriangle(%08x, %08x) shade: %d, texture: %d, zbuffer: %d\n",
+			  _w1, _w2, _shade, _texture, _zbuffer);
 }
 
 static void gDPTriangle(u32 _w1, u32 _w2, int shade, int texture, int zbuffer)
@@ -1246,47 +1217,47 @@ static void gDPTriangle(u32 _w1, u32 _w2, int shade, int texture, int zbuffer)
 void gDPTriFill(u32 w0, u32 w1)
 {
 	gDPTriangle(w0, w1, 0, 0, 0);
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "trifill\n");
+	DebugMsg( DEBUG_NORMAL, "trifill\n");
 }
 
 void gDPTriShade(u32 w0, u32 w1)
 {
 	gDPTriangle(w0, w1, 1, 0, 0);
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "trishade\n");
+	DebugMsg( DEBUG_NORMAL, "trishade\n");
 }
 
 void gDPTriTxtr(u32 w0, u32 w1)
 {
 	gDPTriangle(w0, w1, 0, 1, 0);
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "tritxtr\n");
+	DebugMsg( DEBUG_NORMAL, "tritxtr\n");
 }
 
 void gDPTriShadeTxtr(u32 w0, u32 w1)
 {
 	gDPTriangle(w0, w1, 1, 1, 0);
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "trishadetxtr\n");
+	DebugMsg( DEBUG_NORMAL, "trishadetxtr\n");
 }
 
 void gDPTriFillZ(u32 w0, u32 w1)
 {
 	gDPTriangle(w0, w1, 0, 0, 1);
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "trifillz\n");
+	DebugMsg( DEBUG_NORMAL, "trifillz\n");
 }
 
 void gDPTriShadeZ(u32 w0, u32 w1)
 {
 	gDPTriangle(w0, w1, 1, 0, 1);
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "trishadez\n");
+	DebugMsg( DEBUG_NORMAL, "trishadez\n");
 }
 
 void gDPTriTxtrZ(u32 w0, u32 w1)
 {
 	gDPTriangle(w0, w1, 0, 1, 1);
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "tritxtrz\n");
+	DebugMsg( DEBUG_NORMAL, "tritxtrz\n");
 }
 
 void gDPTriShadeTxtrZ(u32 w0, u32 w1)
 {
 	gDPTriangle(w0, w1, 1, 1, 1);
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "trishadetxtrz\n");
+	DebugMsg( DEBUG_NORMAL, "trishadetxtrz\n");
 }

@@ -8,15 +8,13 @@
 #include "gDP.h"
 #include "gSP.h"
 #include "Config.h"
-#include "Debug.h"
+#include "DebugDump.h"
 #include "DisplayWindow.h"
 
 void RDP_Unknown( u32 w0, u32 w1 )
 {
-#ifdef DEBUG
-	DebugMsg( DEBUG_UNKNOWN, "RDP_Unknown\r\n" );
-	DebugMsg( DEBUG_UNKNOWN, "\tUnknown RDP opcode %02X\r\n", _SHIFTR( w0, 24, 8 ) );
-#endif
+	DebugMsg(DEBUG_NORMAL, "RDP_Unknown\r\n");
+	DebugMsg(DEBUG_NORMAL, "\tUnknown RDP opcode %02X\r\n", _SHIFTR(w0, 24, 8));
 }
 
 void RDP_NoOp( u32 w0, u32 w1 )
@@ -233,7 +231,7 @@ void RDP_LoadSync( u32 w0, u32 w1 )
 static
 bool _getTexRectParams(u32 & w2, u32 & w3)
 {
-	if (RSP.bLLE) {
+	if (RSP.LLE) {
 		w2 = RDP.w2;
 		w3 = RDP.w3;
 		return true;
@@ -270,6 +268,12 @@ bool _getTexRectParams(u32 & w2, u32 & w3)
 		if ((config.generalEmulation.hacks & hack_WinBack) != 0) {
 			RSP.PC[RSP.PCi] += 8;
 			return false;
+		}
+		if (GBI.getMicrocodeType() == F3DSWRS) {
+			w2 = *(u32*)&RDRAM[RSP.PC[RSP.PCi] +  8];
+			w3 = *(u32*)&RDRAM[RSP.PC[RSP.PCi] + 12];
+			RSP.PC[RSP.PCi] += 8;
+			return true;
 		}
 		w2 = *(u32*)&RDRAM[RSP.PC[RSP.PCi] + 0];
 		w3 = *(u32*)&RDRAM[RSP.PC[RSP.PCi] + 4];
@@ -505,7 +509,7 @@ void RDP_Half_1( u32 _c )
 	u32 w0 = 0, w1 = _c;
 	u32 cmd = _SHIFTR( _c, 24, 8 );
 	if (cmd >= 0xc8 && cmd <=0xcf) {//triangle command
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gDPHalf_1 LLE Triangle\n");
+		DebugMsg(DEBUG_NORMAL, "gDPHalf_1 LLE Triangle\n");
 		RDP.cmd_ptr = 0;
 		RDP.cmd_cur = 0;
 		do {
@@ -516,8 +520,7 @@ void RDP_Half_1( u32 _c )
 			w1 = *(u32*)&RDRAM[RSP.PC[RSP.PCi] + 4];
 			RSP.cmd = _SHIFTR( w0, 24, 8 );
 
-			DebugRSPState( RSP.PCi, RSP.PC[RSP.PCi], _SHIFTR( w0, 24, 8 ), w0, w1 );
-			DebugMsg( DEBUG_LOW | DEBUG_HANDLED, "0x%08lX: CMD=0x%02lX W0=0x%08lX W1=0x%08lX\n", RSP.PC[RSP.PCi], _SHIFTR( w0, 24, 8 ), w0, w1 );
+			DebugMsg(DEBUG_NORMAL, "0x%08lX: CMD=0x%02lX W0=0x%08lX W1=0x%08lX\n", RSP.PC[RSP.PCi], _SHIFTR(w0, 24, 8), w0, w1);
 
 			RSP.PC[RSP.PCi] += 8;
 			// RSP.nextCmd = _SHIFTR( *(u32*)&RDRAM[RSP.PC[RSP.PCi]], 24, 8 );
@@ -528,7 +531,7 @@ void RDP_Half_1( u32 _c )
 		w1 = RDP.cmd_data[RDP.cmd_cur+1];
 		LLEcmd[RSP.cmd](w0, w1);
 	} else {
-		DebugMsg( DEBUG_HIGH | DEBUG_IGNORED, "gDPHalf_1()\n" );
+		DebugMsg(DEBUG_NORMAL | DEBUG_IGNORED, "gDPHalf_1()\n");
 	}
 }
 
@@ -563,7 +566,7 @@ void RDP_ProcessRDPList()
 
 	if (dp_end <= dp_current) return;
 
-	RSP.bLLE = true;
+	RSP.LLE = true;
 
 	// load command data
 	for (u32 i = 0; i < length; i += 4) {
@@ -599,7 +602,7 @@ void RDP_ProcessRDPList()
 		RDP.cmd_cur = 0;
 	}
 
-	RSP.bLLE = false;
+	RSP.LLE = false;
 	gDP.changed |= CHANGED_COLORBUFFER;
 	gDP.changed &= ~CHANGED_CPU_FB_WRITE;
 

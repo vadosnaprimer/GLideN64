@@ -1,12 +1,18 @@
 #include <fstream>
 #include <assert.h>
+#include <cstdlib>
+#include <algorithm>
+#include <iomanip>
 
 #include <Graphics/CombinerProgram.h>
+#include <Graphics/Context.h>
 #include <Graphics/OpenGLContext/opengl_Utils.h>
 #include <Types.h>
 #include <Log.h>
 #include <RSP.h>
 #include <PluginAPI.h>
+#include <Combiner.h>
+#include <DisplayLoadProgress.h>
 #include <osal_files.h>
 #include "glsl_Utils.h"
 #include "glsl_ShaderStorage.h"
@@ -18,7 +24,7 @@ using namespace glsl;
 #define SHADER_STORAGE_FOLDER_NAME L"shaders"
 
 static
-void getStorageFileName(const opengl::GLInfo & _glinfo, wchar_t * _fileName)
+void getStorageFileName(const opengl::GLInfo & _glinfo, wchar_t * _shadersFileName, const wchar_t * _fileExtension)
 {
 	wchar_t strCacheFolderPath[PLUGIN_PATH_SIZE];
 	api().GetUserCachePath(strCacheFolderPath);
@@ -38,18 +44,49 @@ void getStorageFileName(const opengl::GLInfo & _glinfo, wchar_t * _fileName)
 		strOpenGLType = L"OpenGL";
 	}
 
-	swprintf(_fileName, PLUGIN_PATH_SIZE, L"%ls/GLideN64.%08lx.%ls.shaders", pPath, std::hash<std::string>()(RSP.romname), strOpenGLType.c_str());
+	swprintf(_shadersFileName, PLUGIN_PATH_SIZE, L"%ls/GLideN64.%08lx.%ls.%ls", pPath, std::hash<std::string>()(RSP.romname), strOpenGLType.c_str(), _fileExtension);
 }
 
-static
-u32 _getConfigOptionsBitSet()
+/*
+Storage has text format:
+line_1 Version in hex form
+line_2 Hardware per pixel lighting support flag
+line_3 Count - numbers of combiners keys in hex form
+line_4..line_Count+3  combiners keys in hex form, one key per line
+*/
+bool ShaderStorage::_saveCombinerKeys(const graphics::Combiners & _combiners) const
 {
-	std::vector<u32> vecOptions;
-	graphics::CombinerProgram::getShaderCombinerOptionsSet(vecOptions);
-	u32 optionsSet = 0;
-	for (u32 i = 0; i < vecOptions.size(); ++i)
-		optionsSet |= vecOptions[i] << i;
-	return optionsSet;
+	wchar_t keysFileName[PLUGIN_PATH_SIZE];
+	getStorageFileName(m_glinfo, keysFileName, L"keys");
+
+#if defined(OS_WINDOWS) && !defined(MINGW)
+	std::ofstream keysOut(keysFileName, std::ofstream::trunc);
+#else
+	char filename_c[PATH_MAX];
+	wcstombs(filename_c, keysFileName, PATH_MAX);
+	std::ofstream keysOut(filename_c, std::ofstream::trunc);
+#endif
+	if (!keysOut)
+		return false;
+
+	const size_t szCombiners = _combiners.size();
+
+	std::vector<char> allShaderData;
+	std::vector<u64> keysData;
+	keysData.reserve(szCombiners);
+	for (auto cur = _combiners.begin(); cur != _combiners.end(); ++cur)
+		keysData.push_back(cur->first.getMux());
+
+	std::sort(keysData.begin(), keysData.end());
+	keysOut << "0x" << std::hex << std::setfill('0') << std::setw(8) << m_keysFormatVersion << "\n";
+	keysOut << "0x" << std::hex << std::setfill('0') << std::setw(8) << static_cast<u32>(GBI.isHWLSupported()) << "\n";
+	keysOut << "0x" << std::hex << std::setfill('0') << std::setw(8) << keysData.size() << "\n";
+	for (u64 key : keysData)
+		keysOut << "0x" << std::hex << std::setfill('0') << std::setw(16) << key << "\n";
+
+	keysOut.flush();
+	keysOut.close();
+	return true;
 }
 
 /*
@@ -63,46 +100,59 @@ char * - GL version string
 uint32 - number of shaders
 shaders in binary form
 */
-static const u32 ShaderStorageFormatVersion = 0x10U;
 bool ShaderStorage::saveShadersStorage(const graphics::Combiners & _combiners) const
 {
-	wchar_t fileName[PLUGIN_PATH_SIZE];
-	getStorageFileName(m_glinfo, fileName);
-
-#if defined(OS_WINDOWS) && !defined(MINGW)
-	std::ofstream fout(fileName, std::ofstream::binary | std::ofstream::trunc);
-#else
-	char fileName_c[PATH_MAX];
-	wcstombs(fileName_c, fileName, PATH_MAX);
-	std::ofstream fout(fileName_c, std::ofstream::binary | std::ofstream::trunc);
-#endif
-	if (!fout)
+	if (!_saveCombinerKeys(_combiners))
 		return false;
 
-	fout.write((char*)&ShaderStorageFormatVersion, sizeof(ShaderStorageFormatVersion));
+	if (gfxContext.isCombinerProgramBuilderObsolete())
+		// Created shaders are obsolete due to changes in config, but we saved combiners keys.
+		return true;
 
-	const u32 configOptionsBitSet = _getConfigOptionsBitSet();
-	fout.write((char*)&configOptionsBitSet, sizeof(configOptionsBitSet));
+	if (!gfxContext.isSupported(graphics::SpecialFeatures::ShaderProgramBinary))
+		// Shaders storage is not supported, but we saved combiners keys.
+		return true;
+
+	wchar_t shadersFileName[PLUGIN_PATH_SIZE];
+	getStorageFileName(m_glinfo, shadersFileName, L"shaders");
+
+#if defined(OS_WINDOWS) && !defined(MINGW)
+	std::ofstream shadersOut(shadersFileName, std::ofstream::binary | std::ofstream::trunc);
+#else
+	char filename_c[PATH_MAX];
+	wcstombs(filename_c, shadersFileName, PATH_MAX);
+	std::ofstream shadersOut(filename_c, std::ofstream::binary | std::ofstream::trunc);
+#endif
+	if (!shadersOut)
+		return false;
+
+	displayLoadProgress(L"SAVE COMBINER SHADERS %.1f%%", 0.0f);
+
+	shadersOut.write((char*)&m_formatVersion, sizeof(m_formatVersion));
+
+	const u32 configOptionsBitSet = graphics::CombinerProgram::getShaderCombinerOptionsBits();
+	shadersOut.write((char*)&configOptionsBitSet, sizeof(configOptionsBitSet));
 
 	const char * strRenderer = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
 	u32 len = strlen(strRenderer);
-	fout.write((char*)&len, sizeof(len));
-	fout.write(strRenderer, len);
+	shadersOut.write((char*)&len, sizeof(len));
+	shadersOut.write(strRenderer, len);
 
 	const char * strGLVersion = reinterpret_cast<const char *>(glGetString(GL_VERSION));
 	len = strlen(strGLVersion);
-	fout.write((char*)&len, sizeof(len));
-	fout.write(strGLVersion, len);
+	shadersOut.write((char*)&len, sizeof(len));
+	shadersOut.write(strGLVersion, len);
 
-	len = _combiners.size();
+	const size_t szCombiners = _combiners.size();
 
-#if 0
-	fout.write((char*)&len, sizeof(len));
-	for (auto cur = _combiners.begin(); cur != _combiners.end(); ++cur)
-		fout << *(cur->second);
-#else
 	u32 totalWritten = 0;
 	std::vector<char> allShaderData;
+	std::vector<u64> keysData;
+
+	const f32 percent = szCombiners / 100.0f;
+	const f32 step = 100.0f / szCombiners;
+	f32 progress = 0.0f;
+	f32 percents = percent;
 
 	for (auto cur = _combiners.begin(); cur != _combiners.end(); ++cur)
 	{
@@ -111,6 +161,11 @@ bool ShaderStorage::saveShadersStorage(const graphics::Combiners & _combiners) c
 		{
 			allShaderData.insert(allShaderData.end(), data.begin(), data.end());
 			++totalWritten;
+			progress += step;
+			if (progress > percents) {
+				displayLoadProgress(L"SAVE COMBINER SHADERS %.1f%%", f32(totalWritten) * 100.f / f32(szCombiners));
+				percents += percent;
+			}
 		}
 		else
 		{
@@ -119,12 +174,12 @@ bool ShaderStorage::saveShadersStorage(const graphics::Combiners & _combiners) c
 		}
 	}
 
-	fout.write((char*)&totalWritten, sizeof(totalWritten));
-	fout.write(allShaderData.data(), allShaderData.size());
-#endif
+	shadersOut.write((char*)&totalWritten, sizeof(totalWritten));
+	shadersOut.write(allShaderData.data(), allShaderData.size());
 
-	fout.flush();
-	fout.close();
+	shadersOut.flush();
+	shadersOut.close();
+	displayLoadProgress(L"");
 	return true;
 }
 
@@ -159,32 +214,93 @@ CombinerProgramImpl * _readCominerProgramFromStream(std::istream & _is,
 	return new CombinerProgramImpl(cmbKey, program, _useProgram, cmbInputs, std::move(uniforms));
 }
 
-bool ShaderStorage::loadShadersStorage(graphics::Combiners & _combiners)
+bool ShaderStorage::_loadFromCombinerKeys(graphics::Combiners & _combiners)
 {
-	wchar_t fileName[PLUGIN_PATH_SIZE];
-	getStorageFileName(m_glinfo, fileName);
-	const u32 configOptionsBitSet = _getConfigOptionsBitSet();
-
+	wchar_t keysFileName[PLUGIN_PATH_SIZE];
+	getStorageFileName(m_glinfo, keysFileName, L"keys");
 #if defined(OS_WINDOWS) && !defined(MINGW)
-	std::ifstream fin(fileName, std::ofstream::binary);
+	std::ifstream fin(keysFileName);
 #else
 	char fileName_c[PATH_MAX];
-	wcstombs(fileName_c, fileName, PATH_MAX);
-	std::ifstream fin(fileName_c, std::ofstream::binary);
+	wcstombs(fileName_c, keysFileName, PATH_MAX);
+	std::ifstream fin(fileName_c);
 #endif
 	if (!fin)
 		return false;
 
+	u32 version;
+	fin >> std::hex >> version;
+	if (version != m_keysFormatVersion)
+		return false;
+
+	u32 hwlSupport;
+	fin >> std::hex >> hwlSupport;
+	GBI.setHWLSupported(static_cast<bool>(hwlSupport));
+
+	displayLoadProgress(L"LOAD COMBINER SHADERS %.1f%%", 0.0f);
+
+	u32 szCombiners;
+	fin >> std::hex >> szCombiners;
+	const f32 percent = szCombiners / 100.0f;
+	const f32 step = 100.0f / szCombiners;
+	f32 progress = 0.0f;
+	f32 percents = percent;
+	u64 key;
+	for (u32 i = 0; i < szCombiners; ++i) {
+		fin >> std::hex >> key;
+		graphics::CombinerProgram * pCombiner = Combiner_Compile(CombinerKey(key, false));
+		pCombiner->update(true);
+		_combiners[pCombiner->getKey()] = pCombiner;
+		progress += step;
+		if (progress > percents) {
+			displayLoadProgress(L"LOAD COMBINER SHADERS %.1f%%", f32(i + 1) * 100.f / f32(szCombiners));
+			percents += percent;
+		}
+	}
+	fin.close();
+
+	if (opengl::Utils::isGLError())
+		return false;
+
+	if (gfxContext.isSupported(graphics::SpecialFeatures::ShaderProgramBinary))
+		// Restore shaders storage
+		return saveShadersStorage(_combiners);
+
+	displayLoadProgress(L"");
+	return true;
+}
+
+bool ShaderStorage::loadShadersStorage(graphics::Combiners & _combiners)
+{
+	if (!gfxContext.isSupported(graphics::SpecialFeatures::ShaderProgramBinary))
+		// Shaders storage is not supported, load from combiners keys.
+		return _loadFromCombinerKeys(_combiners);
+
+	wchar_t shadersFileName[PLUGIN_PATH_SIZE];
+	getStorageFileName(m_glinfo, shadersFileName, L"shaders");
+	const u32 configOptionsBitSet = graphics::CombinerProgram::getShaderCombinerOptionsBits();
+
+#if defined(OS_WINDOWS) && !defined(MINGW)
+	std::ifstream fin(shadersFileName, std::ofstream::binary);
+#else
+	char fileName_c[PATH_MAX];
+	wcstombs(fileName_c, shadersFileName, PATH_MAX);
+	std::ifstream fin(fileName_c, std::ofstream::binary);
+#endif
+
+	if (!fin)
+		return _loadFromCombinerKeys(_combiners);
+
 	try {
 		u32 version;
 		fin.read((char*)&version, sizeof(version));
-		if (version != ShaderStorageFormatVersion)
-			return false;
+		if (version != m_formatVersion)
+			return _loadFromCombinerKeys(_combiners);
 
 		u32 optionsSet;
 		fin.read((char*)&optionsSet, sizeof(optionsSet));
 		if (optionsSet != configOptionsBitSet)
-			return false;
+			return _loadFromCombinerKeys(_combiners);
 
 		const char * strRenderer = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
 		u32 len;
@@ -192,30 +308,39 @@ bool ShaderStorage::loadShadersStorage(graphics::Combiners & _combiners)
 		std::vector<char> strBuf(len);
 		fin.read(strBuf.data(), len);
 		if (strncmp(strRenderer, strBuf.data(), len) != 0)
-			return false;
+			return _loadFromCombinerKeys(_combiners);
 
 		const char * strGLVersion = reinterpret_cast<const char *>(glGetString(GL_VERSION));
 		fin.read((char*)&len, sizeof(len));
 		strBuf.resize(len);
 		fin.read(strBuf.data(), len);
 		if (strncmp(strGLVersion, strBuf.data(), len) != 0)
-			return false;
+			return _loadFromCombinerKeys(_combiners);
 
+		displayLoadProgress(L"LOAD COMBINER SHADERS %.1f%%", 0.0f);
 		CombinerProgramUniformFactory uniformFactory(m_glinfo);
 
 		fin.read((char*)&len, sizeof(len));
+		const f32 percent = len / 100.0f;
+		const f32 step = 100.0f / len;
+		f32 progress = 0.0f;
+		f32 percents = percent;
 		for (u32 i = 0; i < len; ++i) {
 			CombinerProgramImpl * pCombiner = _readCominerProgramFromStream(fin, uniformFactory, m_useProgram);
 			pCombiner->update(true);
 			_combiners[pCombiner->getKey()] = pCombiner;
+			progress += step;
+			if (progress > percents) {
+				displayLoadProgress(L"LOAD COMBINER SHADERS %.1f%%", f32(i + 1) * 100.f / f32(len) );
+				percents += percent;
+			}
 		}
-	}
-	catch (...) {
+	} catch (...) {
 		LOG(LOG_ERROR, "Stream error while loading shader cache! Buffer is probably not big enough");
 	}
 
-//	m_shadersLoaded = m_combiners.size();
 	fin.close();
+	displayLoadProgress(L"");
 	return !opengl::Utils::isGLError();
 }
 

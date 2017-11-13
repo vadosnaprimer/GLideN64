@@ -15,21 +15,19 @@
 
 Config config;
 
-static
-const u32 uMegabyte = 1024U*1024U;
+m64p_handle g_configVideoGeneral = nullptr;
+m64p_handle g_configVideoGliden64 = nullptr;
 
-static m64p_handle g_configVideoGeneral = nullptr;
-static m64p_handle g_configVideoGliden64 = nullptr;
-
-static
 bool Config_SetDefault()
 {
 	if (ConfigOpenSection("Video-General", &g_configVideoGeneral) != M64ERR_SUCCESS) {
 		LOG(LOG_ERROR, "Unable to open Video-General configuration section");
+		g_configVideoGeneral = nullptr;
 		return false;
 	}
 	if (ConfigOpenSection("Video-GLideN64", &g_configVideoGliden64) != M64ERR_SUCCESS) {
 		LOG(LOG_ERROR, "Unable to open GLideN64 configuration section");
+		g_configVideoGliden64 = nullptr;
 		return false;
 	}
 
@@ -67,8 +65,6 @@ bool Config_SetDefault()
 	res = ConfigSetDefaultBool(g_configVideoGliden64, "bilinearMode", config.texture.bilinearMode, "Bilinear filtering mode (0=N64 3point, 1=standard)");
 	assert(res == M64ERR_SUCCESS);
 	res = ConfigSetDefaultBool(g_configVideoGliden64, "MaxAnisotropy", config.texture.maxAnisotropy, "Max level of Anisotropic Filtering, 0 for off");
-	assert(res == M64ERR_SUCCESS);
-	res = ConfigSetDefaultInt(g_configVideoGliden64, "CacheSize", config.texture.maxBytes / uMegabyte, "Size of texture cache in megabytes. Good value is VRAM*3/4");
 	assert(res == M64ERR_SUCCESS);
 	//#Emulation Settings
 	res = ConfigSetDefaultBool(g_configVideoGliden64, "EnableNoise", config.generalEmulation.enableNoise, "Enable color noise emulation.");
@@ -127,7 +123,7 @@ bool Config_SetDefault()
 	assert(res == M64ERR_SUCCESS);
 	res = ConfigSetDefaultBool(g_configVideoGliden64, "txFilterIgnoreBG", config.textureFilter.txFilterIgnoreBG, "Don't filter background textures.");
 	assert(res == M64ERR_SUCCESS);
-	res = ConfigSetDefaultInt(g_configVideoGliden64, "txCacheSize", config.textureFilter.txCacheSize/uMegabyte, "Size of filtered textures cache in megabytes.");
+	res = ConfigSetDefaultInt(g_configVideoGliden64, "txCacheSize", config.textureFilter.txCacheSize/ gc_uMegabyte, "Size of filtered textures cache in megabytes.");
 	assert(res == M64ERR_SUCCESS);
 	res = ConfigSetDefaultBool(g_configVideoGliden64, "txHiresEnable", config.textureFilter.txHiresEnable, "Use high-resolution texture packs if available.");
 	assert(res == M64ERR_SUCCESS);
@@ -156,18 +152,6 @@ bool Config_SetDefault()
 	res = ConfigSetDefaultString(g_configVideoGliden64, "fontColor", "B5E61D", "Font color in RGB format.");
 	assert(res == M64ERR_SUCCESS);
 
-	//#Bloom filter settings
-	res = ConfigSetDefaultBool(g_configVideoGliden64, "EnableBloom", config.bloomFilter.enable, "Enable bloom filter");
-	assert(res == M64ERR_SUCCESS);
-	res = ConfigSetDefaultInt(g_configVideoGliden64, "bloomThresholdLevel", config.bloomFilter.thresholdLevel, "Brightness threshold level for bloom. Values [2, 6]");
-	assert(res == M64ERR_SUCCESS);
-	res = ConfigSetDefaultInt(g_configVideoGliden64, "bloomBlendMode", config.bloomFilter.blendMode, "Bloom blend mode (0=Strong, 1=Mild, 2=Light)");
-	assert(res == M64ERR_SUCCESS);
-	res = ConfigSetDefaultInt(g_configVideoGliden64, "blurAmount", config.bloomFilter.blurAmount, "Blur radius. Values [2, 10]");
-	assert(res == M64ERR_SUCCESS);
-	res = ConfigSetDefaultInt(g_configVideoGliden64, "blurStrength", config.bloomFilter.blurStrength, "Blur strength. Values [10, 100]");
-	assert(res == M64ERR_SUCCESS);
-
 	//#Gamma correction settings
 	res = ConfigSetDefaultBool(g_configVideoGliden64, "ForceGammaCorrection", config.gammaCorrection.force, "Force gamma correction.");
 	assert(res == M64ERR_SUCCESS);
@@ -184,6 +168,12 @@ bool Config_SetDefault()
 	res = ConfigSetDefaultInt(g_configVideoGliden64, "CountersPos", config.onScreenDisplay.pos,
 		"Counters position (1=top left, 2=top center, 4=top right, 8=bottom left, 16=bottom center, 32=bottom right)");
 	assert(res == M64ERR_SUCCESS);
+
+#ifdef DEBUG_DUMP
+	//#Debug settings
+	res = ConfigSetDefaultInt(g_configVideoGliden64, "DebugDumpMode", config.debug.dumpMode, "Enable debug dump. Set 3 to normal or 7 to detailed dump.");
+	assert(res == M64ERR_SUCCESS);
+#endif
 
 	return ConfigSaveSection("Video-GLideN64") == M64ERR_SUCCESS;
 }
@@ -231,8 +221,6 @@ void Config_LoadCustomConfig()
 	if (result == M64ERR_SUCCESS) config.texture.maxAnisotropy = atoi(value);
 	result = ConfigExternalGetParameter(fileHandle, sectionName, "texture\\bilinearMode", value, sizeof(value));
 	if (result == M64ERR_SUCCESS) config.texture.bilinearMode = atoi(value);
-	result = ConfigExternalGetParameter(fileHandle, sectionName, "texture\\maxBytes", value, sizeof(value));
-	if (result == M64ERR_SUCCESS) config.texture.maxBytes = atoi(value);
 	result = ConfigExternalGetParameter(fileHandle, sectionName, "texture\\screenShotFormat", value, sizeof(value));
 	if (result == M64ERR_SUCCESS) config.texture.screenShotFormat = atoi(value);
 
@@ -248,6 +236,10 @@ void Config_LoadCustomConfig()
 	if (result == M64ERR_SUCCESS) config.generalEmulation.correctTexrectCoords = atoi(value);
 	result = ConfigExternalGetParameter(fileHandle, sectionName, "generalEmulation\\enableNativeResTexrects", value, sizeof(value));
 	if (result == M64ERR_SUCCESS) config.generalEmulation.enableNativeResTexrects = atoi(value);
+	result = ConfigExternalGetParameter(fileHandle, sectionName, "generalEmulation\\enableLegacyBlending", value, sizeof(value));
+	if (result == M64ERR_SUCCESS) config.generalEmulation.enableLegacyBlending = atoi(value);
+	result = ConfigExternalGetParameter(fileHandle, sectionName, "generalEmulation\\enableFragmentDepthWrite", value, sizeof(value));
+	if (result == M64ERR_SUCCESS) config.generalEmulation.enableFragmentDepthWrite = atoi(value);
 
 	result = ConfigExternalGetParameter(fileHandle, sectionName, "frameBufferEmulation\\enable", value, sizeof(value));
 	if (result == M64ERR_SUCCESS) config.frameBufferEmulation.enable = atoi(value);
@@ -303,23 +295,8 @@ void Config_LoadCustomConfig()
 
 void Config_LoadConfig()
 {
-	const u32 hacks = config.generalEmulation.hacks;
-
-	if (!Config_SetDefault()) {
-		config.generalEmulation.hacks = hacks;
+	if (g_configVideoGeneral == nullptr || g_configVideoGliden64 == nullptr)
 		return;
-	}
-
-	config.version = ConfigGetParamInt(g_configVideoGliden64, "configVersion");
-	if (config.version != CONFIG_VERSION_CURRENT) {
-		m64p_error res = ConfigDeleteSection("Video-GLideN64");
-		assert(res == M64ERR_SUCCESS);
-		ConfigSaveFile();
-		if (!Config_SetDefault()) {
-			config.generalEmulation.hacks = hacks;
-			return;
-		}
-	}
 
 	config.video.fullscreen = ConfigGetParamBool(g_configVideoGeneral, "Fullscreen");
 	config.video.windowedWidth = ConfigGetParamInt(g_configVideoGeneral, "ScreenWidth");
@@ -338,7 +315,6 @@ void Config_LoadConfig()
 	//#Texture Settings
 	config.texture.bilinearMode = ConfigGetParamBool(g_configVideoGliden64, "bilinearMode");
 	config.texture.maxAnisotropy = ConfigGetParamInt(g_configVideoGliden64, "MaxAnisotropy");
-	config.texture.maxBytes = ConfigGetParamInt(g_configVideoGliden64, "CacheSize") * uMegabyte;
 	//#Emulation Settings
 	config.generalEmulation.enableNoise = ConfigGetParamBool(g_configVideoGliden64, "EnableNoise");
 	config.generalEmulation.enableLOD = ConfigGetParamBool(g_configVideoGliden64, "EnableLOD");
@@ -370,7 +346,7 @@ void Config_LoadConfig()
 	config.textureFilter.txEnhancementMode = ConfigGetParamInt(g_configVideoGliden64, "txEnhancementMode");
 	config.textureFilter.txDeposterize = ConfigGetParamInt(g_configVideoGliden64, "txDeposterize");
 	config.textureFilter.txFilterIgnoreBG = ConfigGetParamBool(g_configVideoGliden64, "txFilterIgnoreBG");
-	config.textureFilter.txCacheSize = ConfigGetParamInt(g_configVideoGliden64, "txCacheSize") * uMegabyte;
+	config.textureFilter.txCacheSize = ConfigGetParamInt(g_configVideoGliden64, "txCacheSize") * gc_uMegabyte;
 	config.textureFilter.txHiresEnable = ConfigGetParamBool(g_configVideoGliden64, "txHiresEnable");
 	config.textureFilter.txHiresFullAlphaChannel = ConfigGetParamBool(g_configVideoGliden64, "txHiresFullAlphaChannel");
 	config.textureFilter.txHresAltCRC = ConfigGetParamBool(g_configVideoGliden64, "txHresAltCRC");
@@ -400,12 +376,6 @@ void Config_LoadConfig()
 	config.font.size = ConfigGetParamInt(g_configVideoGliden64, "fontSize");
 	if (config.font.size == 0)
 		config.font.size = 30;
-	//#Bloom filter settings
-	config.bloomFilter.enable = ConfigGetParamBool(g_configVideoGliden64, "EnableBloom");
-	config.bloomFilter.thresholdLevel = ConfigGetParamInt(g_configVideoGliden64, "bloomThresholdLevel");
-	config.bloomFilter.blendMode = ConfigGetParamInt(g_configVideoGliden64, "bloomBlendMode");
-	config.bloomFilter.blurAmount = ConfigGetParamInt(g_configVideoGliden64, "blurAmount");
-	config.bloomFilter.blurStrength = ConfigGetParamInt(g_configVideoGliden64, "blurStrength");
 
 	//#Gamma correction settings
 	config.gammaCorrection.force = ConfigGetParamBool(g_configVideoGliden64, "ForceGammaCorrection");
@@ -417,7 +387,10 @@ void Config_LoadConfig()
 	config.onScreenDisplay.percent = ConfigGetParamBool(g_configVideoGliden64, "ShowPercent");
 	config.onScreenDisplay.pos = ConfigGetParamInt(g_configVideoGliden64, "CountersPos");
 
+#ifdef DEBUG_DUMP
+	config.debug.dumpMode = ConfigGetParamInt(g_configVideoGliden64, "DebugDumpMode");
+#endif
+
 	if (config.generalEmulation.enableCustomSettings)
 		Config_LoadCustomConfig();
-	config.generalEmulation.hacks = hacks;
 }

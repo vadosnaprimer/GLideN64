@@ -93,7 +93,7 @@ struct gDPTile
 	u32 textureMode;
 	u32 loadType;
 	u32 imageAddress;
-	FrameBuffer *frameBuffer;
+	u32 frameBufferAddress;
 };
 
 struct gDPLoadTileInfo {
@@ -101,6 +101,8 @@ struct gDPLoadTileInfo {
 	u8 loadType;
 	u16 uls;
 	u16 ult;
+	u16 lrs;
+	u16 lrt;
 	u16 width;
 	u16 height;
 	u16 texWidth;
@@ -117,7 +119,7 @@ struct gDPScissor
 
 struct gDPInfo
 {
-	struct
+	struct OtherMode
 	{
 		union
 		{
@@ -132,7 +134,7 @@ struct gDPInfo
 					unsigned int depthCompare : 1;
 					unsigned int depthUpdate : 1;
 					unsigned int imageRead : 1;
-					unsigned int clearOnCvg : 1;
+					unsigned int colorOnCvg : 1;
 
 					unsigned int cvgDest : 2;
 					unsigned int depthMode : 2;
@@ -160,7 +162,11 @@ struct gDPInfo
 				unsigned int colorDither : 2;
 
 				unsigned int combineKey : 1;
-				unsigned int textureConvert : 3;
+//				unsigned int textureConvert : 3;
+				unsigned int convert_one : 1;
+				unsigned int bi_lerp1 : 1;
+				unsigned int bi_lerp0 : 1;
+
 				unsigned int textureFilter : 2;
 				unsigned int textureLUT : 2;
 
@@ -195,7 +201,7 @@ struct gDPInfo
 		f32 r, g, b, a;
 	} fogColor,  blendColor, envColor, rectColor;
 
-	struct
+	struct FillColor
 	{
 		f32 z, dz;
 		u32 color;

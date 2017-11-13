@@ -4,8 +4,10 @@
 
 class CombinerKey {
 public:
-	CombinerKey() = default;
-	explicit CombinerKey(u64 _mux);
+	CombinerKey() {
+		m_key.mux = 0;
+	}
+	explicit CombinerKey(u64 _mux, bool _setModeBits = true);
 	CombinerKey(const CombinerKey & _other);
 
 	void operator=(u64 _mux);

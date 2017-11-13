@@ -10,6 +10,7 @@
 #include <QRegExpValidator>
 
 #include "../Config.h"
+#include "../DebugDump.h"
 #include "ui_configDialog.h"
 #include "Settings.h"
 #include "ConfigDialog.h"
@@ -105,7 +106,6 @@ void ConfigDialog::_init()
 	ui->aliasingSlider->setValue(powof(config.video.multisampling));
 	ui->aliasingLabelVal->setText(QString::number(config.video.multisampling));
 	ui->anisotropicSlider->setValue(config.texture.maxAnisotropy);
-	ui->cacheSizeSpinBox->setValue(config.texture.maxBytes / gc_uMegabyte);
 	ui->vSyncCheckBox->setChecked(config.video.verticalSync != 0);
 
 	switch (config.texture.bilinearMode) {
@@ -119,7 +119,7 @@ void ConfigDialog::_init()
 
 	switch (config.texture.screenShotFormat) {
 	case 0:
-		ui->bmpRadioButton->setChecked(true);
+		ui->pngRadioButton->setChecked(true);
 		break;
 	case 1:
 		ui->jpegRadioButton->setChecked(true);
@@ -222,22 +222,6 @@ void ConfigDialog::_init()
 	ui->txPathLabel->setText(QString::fromWCharArray(config.textureFilter.txPath));
 
 	// Post filter settings
-	ui->bloomGroupBox->setChecked(config.bloomFilter.enable != 0);
-	switch (config.bloomFilter.blendMode) {
-	case 0:
-		ui->bloomStrongRadioButton->setChecked(true);
-		break;
-	case 1:
-		ui->bloomMildRadioButton->setChecked(true);
-		break;
-	case 2:
-		ui->bloomLightRadioButton->setChecked(true);
-		break;
-	}
-	ui->bloomThresholdSlider->setValue(config.bloomFilter.thresholdLevel);
-	ui->blurAmountSlider->setValue(config.bloomFilter.blurAmount);
-	ui->blurStrengthSlider->setValue(config.bloomFilter.blurStrength);
-
 	ui->gammaCorrectionGroupBox->setChecked(config.gammaCorrection.force != 0);
 	ui->gammaLevelSpinBox->setValue(config.gammaCorrection.level);
 
@@ -288,6 +272,19 @@ void ConfigDialog::_init()
 	ui->buttonBox->button(QDialogButtonBox::Ok)->setText(tr("OK"));
 	ui->buttonBox->button(QDialogButtonBox::Cancel)->setText(tr("Cancel"));
 	ui->buttonBox->button(QDialogButtonBox::RestoreDefaults)->setText(tr("Restore Defaults"));
+
+	ui->dumpLowCheckBox->setChecked((config.debug.dumpMode & DEBUG_LOW) != 0);
+	ui->dumpNormalCheckBox->setChecked((config.debug.dumpMode & DEBUG_NORMAL) != 0);
+	ui->dumpDetailCheckBox->setChecked((config.debug.dumpMode & DEBUG_DETAIL) != 0);
+
+#ifndef DEBUG_DUMP
+	for (int i = 0; i < ui->tabWidget->count(); ++i) {
+		if (tr("Debug") == ui->tabWidget->tabText(i)) {
+			ui->tabWidget->removeTab(i);
+			break;
+		}
+	}
+#endif
 }
 
 void ConfigDialog::_getTranslations(QStringList & _translationFiles) const
@@ -314,7 +311,8 @@ void ConfigDialog::setIniPath(const QString & _strIniPath)
 		const bool bCurrent = locale == currentTranslation;
 		locale.truncate(locale.lastIndexOf('.')); // "TranslationExample_de"
 		locale.remove(0, locale.indexOf('_') + 1); // "de"
-		QString language = QLocale::languageToString(QLocale(locale).language());
+		QString language = QLocale(locale).nativeLanguageName();
+		language = language.left(1).toUpper() + language.remove(0, 1);
 		if (bCurrent) {
 			listIndex = i + 1;
 		}
@@ -345,10 +343,11 @@ void ConfigDialog::accept()
 	m_accepted = true;
 
 	int windowedValidatorPos = 0;
+	QString currentText = ui->windowedResolutionComboBox->currentText();
 	if (ui->windowedResolutionComboBox->validator()->validate(
-		ui->windowedResolutionComboBox->currentText(), windowedValidatorPos
+		currentText, windowedValidatorPos
 	) == QValidator::Acceptable) {
-		QStringList windowedResolutionDimensions = ui->windowedResolutionComboBox->currentText().split("x");
+		QStringList windowedResolutionDimensions = currentText.split("x");
 		config.video.windowedWidth = windowedResolutionDimensions[0].trimmed().toInt();
 		config.video.windowedHeight = windowedResolutionDimensions[1].trimmed().toInt();
 	}
@@ -362,14 +361,13 @@ void ConfigDialog::accept()
 
 	config.video.multisampling = ui->n64DepthCompareCheckBox->isChecked() ? 0 : pow2(ui->aliasingSlider->value());
 	config.texture.maxAnisotropy = ui->anisotropicSlider->value();
-	config.texture.maxBytes = ui->cacheSizeSpinBox->value() * gc_uMegabyte;
 
 	if (ui->blnrStandardRadioButton->isChecked())
 		config.texture.bilinearMode = BILINEAR_STANDARD;
 	else if (ui->blnr3PointRadioButton->isChecked())
 		config.texture.bilinearMode = BILINEAR_3POINT;
 
-	if (ui->bmpRadioButton->isChecked())
+	if (ui->pngRadioButton->isChecked())
 		config.texture.screenShotFormat = 0;
 	else if (ui->jpegRadioButton->isChecked())
 		config.texture.screenShotFormat = 1;
@@ -453,17 +451,6 @@ void ConfigDialog::accept()
 		config.textureFilter.txPath[txPath.toWCharArray(config.textureFilter.txPath)] = L'\0';
 
 	// Post filter settings
-	config.bloomFilter.enable = ui->bloomGroupBox->isChecked() ? 1 : 0;
-	if (ui->bloomStrongRadioButton->isChecked())
-		config.bloomFilter.blendMode = 0;
-	else if (ui->bloomMildRadioButton->isChecked())
-		config.bloomFilter.blendMode = 1;
-	else if (ui->bloomLightRadioButton->isChecked())
-		config.bloomFilter.blendMode = 2;
-	config.bloomFilter.thresholdLevel = ui->bloomThresholdSlider->value();
-	config.bloomFilter.blurAmount = ui->blurAmountSlider->value();
-	config.bloomFilter.blurStrength = ui->blurStrengthSlider->value();
-
 	config.gammaCorrection.force = ui->gammaCorrectionGroupBox->isChecked() ? 1 : 0;
 	config.gammaCorrection.level = ui->gammaLevelSpinBox->value();
 
@@ -500,6 +487,14 @@ void ConfigDialog::accept()
 	config.onScreenDisplay.fps = ui->fpsCheckBox->isChecked() ? 1 : 0;
 	config.onScreenDisplay.vis = ui->visCheckBox->isChecked() ? 1 : 0;
 	config.onScreenDisplay.percent = ui->percentCheckBox->isChecked() ? 1 : 0;
+
+	config.debug.dumpMode = 0;
+	if (ui->dumpLowCheckBox->isChecked())
+		config.debug.dumpMode |= DEBUG_LOW;
+	if (ui->dumpNormalCheckBox->isChecked())
+		config.debug.dumpMode |= DEBUG_NORMAL;
+	if (ui->dumpDetailCheckBox->isChecked())
+		config.debug.dumpMode |= DEBUG_DETAIL;
 
 	writeSettings(m_strIniPath);
 

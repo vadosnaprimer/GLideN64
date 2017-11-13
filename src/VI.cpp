@@ -11,7 +11,9 @@
 #include "FrameBufferInfo.h"
 #include "Config.h"
 #include "Performance.h"
-#include "Debug.h"
+#include "Debugger.h"
+#include "DebugDump.h"
+#include "Keys.h"
 #include "DisplayWindow.h"
 #include <Graphics/Context.h>
 
@@ -82,13 +84,10 @@ void VI_UpdateSize()
 	FrameBufferList & fbList = frameBufferList();
 	FrameBuffer * pBuffer = fbList.findBuffer(VI.lastOrigin);
 	DepthBuffer * pDepthBuffer = pBuffer != nullptr ? pBuffer->m_pDepthBuffer : nullptr;
-	if (config.frameBufferEmulation.enable && ((config.generalEmulation.hacks & hack_ZeldaMM) == 0) &&
+	if (config.frameBufferEmulation.enable &&
 		((interlacedPrev != VI.interlaced) ||
 		(VI.width > 0 && VI.width != VI.widthPrev) ||
-		(!VI.interlaced && pDepthBuffer != nullptr && pDepthBuffer->m_width != VI.width)
-)
-
-	) {
+		(!VI.interlaced && pDepthBuffer != nullptr && pDepthBuffer->m_width != VI.width))) {
 		fbList.removeBuffers(VI.widthPrev);
 		fbList.removeBuffers(VI.width);
 		depthBufferList().destroy();
@@ -114,12 +113,18 @@ void VI_UpdateScreen()
 	if (wnd.resizeWindow())
 		return;
 	wnd.saveScreenshot();
+	g_debugger.checkDebugState();
+
+	if (isKeyPressed(G64_VK_G, 0x0001)) {
+		SwitchDump(config.debug.dumpMode);
+	}
 
 	bool bVIUpdated = false;
 	if (*REG.VI_ORIGIN != VI.lastOrigin) {
 		VI_UpdateSize();
 		bVIUpdated = true;
 		wnd.updateScale();
+		perf.increaseFramesCount();
 	}
 
 	if (config.frameBufferEmulation.enable) {

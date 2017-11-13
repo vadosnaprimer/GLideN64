@@ -4,7 +4,7 @@
 #include <string>
 #include "Types.h"
 
-#define CONFIG_VERSION_CURRENT 17U
+#define CONFIG_VERSION_CURRENT 19U
 
 #define BILINEAR_3POINT   0
 #define BILINEAR_STANDARD 1
@@ -40,7 +40,6 @@ struct Config
 		u32 maxAnisotropy;
 		f32 maxAnisotropyF;
 		u32 bilinearMode;
-		u32 maxBytes;
 		u32 screenShotFormat;
 	} texture;
 
@@ -143,14 +142,6 @@ struct Config
 	} font;
 
 	struct {
-		u32 enable;
-		u32 thresholdLevel;
-		u32 blendMode;
-		u32 blurAmount;
-		u32 blurStrength;
-	} bloomFilter;
-
-	struct {
 		u32 force;
 		f32 level;
 	} gammaCorrection;
@@ -173,6 +164,10 @@ struct Config
 		u32 pos;
 	} onScreenDisplay;
 
+	struct {
+		u32 dumpMode;
+	} debug;
+
 	void resetToDefaults();
 };
 
@@ -181,21 +176,22 @@ struct Config
 #define hack_blurPauseScreen		(1<<2)  //Game copies frame buffer to depth buffer area, CPU blurs it. That image is used as background for pause screen.
 #define hack_scoreboard				(1<<3)  //Copy data from RDRAM to auxilary frame buffer. Scoreboard in Mario Tennis.
 #define hack_scoreboardJ			(1<<4)  //Copy data from RDRAM to auxilary frame buffer. Scoreboard in Mario Tennis (J).
-#define hack_pilotWings				(1<<5)  //Special blend mode for PilotWings.
+#define hack_texrect_shade_alpha	(1<<5)  //Set vertex alpha to 1 when texrect alpha combiner uses shade. Pokemon Stadium 2
 #define hack_subscreen				(1<<6)  //Fix subscreen delay in Zelda OOT and Doubutsu no Mori
 #define hack_blastCorps				(1<<7)  //Blast Corps black polygons
-#define hack_NegativeViewport		(1<<8)  //Reverse negative viewport when game set it. Eikou no Saint Andrews, pachinko nichi 365
+#define hack_Infloop				(1<<8) //Gauntlet Legends yielding
 #define hack_rectDepthBufferCopyPD	(1<<9)  //Copy depth buffer only when game need it. Optimized for PD
 #define hack_rectDepthBufferCopyCBFD (1<<10) //Copy depth buffer only when game need it. Optimized for CBFD
 #define hack_WinBack				(1<<11) //Hack for WinBack to remove gray rectangle in HLE mode
 #define hack_ZeldaMM				(1<<12) //Special hacks for Zelda MM
 #define hack_ModifyVertexXyInShader	(1<<13) //Pass screen coordinates provided in gSPModifyVertex to vertes shader.
 #define hack_legoRacers				(1<<14) //LEGO racers course map
-#define hack_doNotResetTLUTmode		(1<<15) //Don't set TLUT mode to none after dlist end. Quake 64
-#define hack_LoadDepthTextures		(1<<16) //Load textures for depth buffer
-#define hack_Snap					(1<<17) //Frame buffer settings for camera detection in Pokemon Snap. Copy aux buffers at fullsync
-#define hack_MK64					(1<<18) //Hack for load MK64 HD textures properly.
-#define hack_RE2					(1<<19) //RE2 hacks.
+#define hack_doNotResetOtherModeH	(1<<15) //Don't reset othermode.h after dlist end. Quake and Quake 2
+#define hack_doNotResetOtherModeL	(1<<16) //Don't reset othermode.l after dlist end. Quake
+#define hack_LoadDepthTextures		(1<<17) //Load textures for depth buffer
+#define hack_Snap					(1<<18) //Frame buffer settings for camera detection in Pokemon Snap. Copy aux buffers at fullsync
+#define hack_MK64					(1<<19) //Hack for load MK64 HD textures properly.
+#define hack_RE2					(1<<20) //RE2 hacks.
 
 extern Config config;
 
@@ -203,5 +199,7 @@ void Config_LoadConfig();
 #ifndef MUPENPLUSAPI
 void Config_DoConfig(/*HWND hParent*/);
 #endif
+
+bool isHWLightingAllowed();
 
 #endif // CONFIG_H

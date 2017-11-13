@@ -4,7 +4,6 @@
 #include <assert.h>
 #include "N64.h"
 #include "GLideN64.h"
-#include "Debug.h"
 #include "Types.h"
 #include "RSP.h"
 #include "GBI.h"
@@ -14,7 +13,7 @@
 #include "CRC.h"
 #include <string.h>
 #include "convert.h"
-#include "S2DEX.h"
+#include "uCodes/S2DEX.h"
 #include "VI.h"
 #include "FrameBuffer.h"
 #include "DepthBuffer.h"
@@ -117,7 +116,7 @@ void gSPBillboardVertex4NEON(u32 v)
     );
 }
 
-void gSPTransformVertex_NEON(float vtx[4], float mtx[4][4])
+void gSPTransformVector_NEON(float vtx[4], float mtx[4][4])
 {
     // Load vtx
     float32x4_t _vtx = vld1q_f32(vtx);
@@ -135,6 +134,25 @@ void gSPTransformVertex_NEON(float vtx[4], float mtx[4][4])
 
     // Store vtx
     vst1q_f32(vtx, _mtx0);
+}
+
+void gSPInverseTransformVector_NEON(float vec[3], float mtx[4][4])
+{
+    float32x4x4_t _mtx = vld4q_f32(mtx[0]);                         // load 4x4 mtx interleaved
+
+    _mtx.val[0] = vmulq_n_f32(_mtx.val[0], vec[0]);                 // mtx[0][0]=mtx[0][0]*_vtx[0]
+                                                                    // mtx[0][1]=mtx[0][1]*_vtx[0]
+                                                                    // mtx[0][2]=mtx[0][2]*_vtx[0]
+    _mtx.val[0] = vmlaq_n_f32(_mtx.val[0], _mtx.val[1], vec[1]);    // mtx[0][0]+=mtx[1][0]*_vtx[1]
+                                                                    // mtx[0][1]+=mtx[1][1]*_vtx[1]
+                                                                    // mtx[0][2]+=mtx[1][2]*_vtx[1]
+    _mtx.val[0] = vmlaq_n_f32(_mtx.val[0], _mtx.val[2], vec[2]);    // mtx[0][0]+=mtx[2][0]*_vtx[2]
+                                                                    // mtx[0][1]+=mtx[2][1]*_vtx[2]
+                                                                    // mtx[0][2]+=mtx[2][2]*_vtx[2]
+    const float32x4_t _vec4 = _mtx.val[0];
+    vec[0] = _vec4[0];                                              // store vec[0]
+    vec[1] = _vec4[1];                                              // store vec[1]
+    vec[2] = _vec4[2];                                              // store vec[2]
 }
 
 void DotProductMax7FullNeon( float v0[3], float v1[7][3], float lights[7][3], float _vtx[3])
@@ -245,12 +263,11 @@ void DotProductMax4FullNeon( float v0[3], float v1[4][3], float _lights[4][3], f
     );
 }
 
-void gSPLightVertex4_NEON(u32 v)
+void gSPLightVertex_NEON(u32 vnum, u32 v, SPVertex * spVtx)
 {
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	if (!config.generalEmulation.enableHWLighting) {
-		for(int j = 0; j < 4; ++j) {
-			SPVertex & vtx = drawer.getVertex(v+j);
+	if (!isHWLightingAllowed()) {
+		for(int j = 0; j < vnum; ++j) {
+			SPVertex & vtx = spVtx[v + j];
 			vtx.r = gSP.lights.rgb[gSP.numLights][R];
 			vtx.g = gSP.lights.rgb[gSP.numLights][G];
 			vtx.b = gSP.lights.rgb[gSP.numLights][B];
@@ -280,49 +297,10 @@ void gSPLightVertex4_NEON(u32 v)
 			vtx.b = min(1.0f, vtx.b);
 		}
 	} else {
-		for(int j = 0; j < 4; ++j) {
-			SPVertex & vtx = drawer.getVertex(v+j);
+		for(int j = 0; j < vnum; ++j) {
+			SPVertex & vtx = spVtx[v+j];
+			TransformVectorNormalize(&vtx.r, gSP.matrix.modelView[gSP.matrix.modelViewi]);
 			vtx.HWLight = gSP.numLights;
-			vtx.r = vtx.nx;
-			vtx.g = vtx.ny;
-			vtx.b = vtx.nz;
 		}
-	}
-}
-
-void gSPLightVertex_NEON(SPVertex & _vtx)
-{
-	if (config.generalEmulation.enableHWLighting == 0) {
-		_vtx.HWLight = 0;
-		_vtx.r = gSP.lights.rgb[gSP.numLights][R];
-		_vtx.g = gSP.lights.rgb[gSP.numLights][G];
-		_vtx.b = gSP.lights.rgb[gSP.numLights][B];
-		s32 count = gSP.numLights-1;
-		while (count >= 6) {
-			DotProductMax7FullNeon(&_vtx.nx,(float (*)[3])gSP.lights.i_xyz[gSP.numLights - count - 1],(float (*)[3])gSP.lights.rgb[gSP.numLights - count - 1],&_vtx.r);
-			count -= 7;
-		}
-		while (count >= 3) {
-			DotProductMax4FullNeon(&_vtx.nx,(float (*)[3])gSP.lights.i_xyz[gSP.numLights - count - 1],(float (*)[3])gSP.lights.rgb[gSP.numLights - count - 1],&_vtx.r);
-			count -= 4;
-		}
-		while (count >= 0)
-		{
-			f32 intensity = DotProduct( &_vtx.nx, gSP.lights.i_xyz[gSP.numLights - count - 1] );
-			if (intensity < 0.0f)
-				intensity = 0.0f;
-			_vtx.r += gSP.lights.rgb[gSP.numLights - count - 1][R] * intensity;
-			_vtx.g += gSP.lights.rgb[gSP.numLights - count - 1][G] * intensity;
-			_vtx.b += gSP.lights.rgb[gSP.numLights - count - 1][B] * intensity;
-			count -= 1;
-		}
-		_vtx.r = min(1.0f, _vtx.r);
-		_vtx.g = min(1.0f, _vtx.g);
-		_vtx.b = min(1.0f, _vtx.b);
-	} else {
-		_vtx.HWLight = gSP.numLights;
-		_vtx.r = _vtx.nx;
-		_vtx.g = _vtx.ny;
-		_vtx.b = _vtx.nz;
 	}
 }

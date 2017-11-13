@@ -66,12 +66,7 @@ void ContextImpl::init()
 			m_graphicsDrawer.reset(new UnbufferedDrawer(m_glInfo, m_cachedFunctions->getCachedVertexAttribArray()));
 	}
 
-	m_combinerProgramBuilder.reset(new glsl::CombinerProgramBuilder(m_glInfo, m_cachedFunctions->getCachedUseProgram()));
-	m_specialShadersFactory.reset(new glsl::SpecialShadersFactory(m_glInfo,
-		m_cachedFunctions->getCachedUseProgram(),
-		m_combinerProgramBuilder->getVertexShaderHeader(),
-		m_combinerProgramBuilder->getFragmentShaderHeader(),
-		m_combinerProgramBuilder->getFragmentShaderEnd()));
+	resetCombinerProgramBuilder();
 }
 
 void ContextImpl::destroy()
@@ -319,6 +314,25 @@ graphics::ColorBufferReader * ContextImpl::createColorBufferReader(CachedTexture
 
 /*---------------Shaders-------------*/
 
+bool ContextImpl::isCombinerProgramBuilderObsolete()
+{
+	if (!m_combinerProgramBuilder)
+		return true;
+	return m_combinerProgramBuilder->isObsolete();
+}
+
+void ContextImpl::resetCombinerProgramBuilder()
+{
+	if (!isCombinerProgramBuilderObsolete())
+		return;
+	m_combinerProgramBuilder.reset(new glsl::CombinerProgramBuilder(m_glInfo, m_cachedFunctions->getCachedUseProgram()));
+	m_specialShadersFactory.reset(new glsl::SpecialShadersFactory(m_glInfo,
+		m_cachedFunctions->getCachedUseProgram(),
+		m_combinerProgramBuilder->getVertexShaderHeader(),
+		m_combinerProgramBuilder->getFragmentShaderHeader(),
+		m_combinerProgramBuilder->getFragmentShaderEnd()));
+}
+
 graphics::CombinerProgram * ContextImpl::createCombinerProgram(Combiner & _color, Combiner & _alpha, const CombinerKey & _key)
 {
 	return m_combinerProgramBuilder->buildCombinerProgram(_color, _alpha, _key);
@@ -339,11 +353,6 @@ bool ContextImpl::loadShadersStorage(graphics::Combiners & _combiners)
 graphics::ShaderProgram * ContextImpl::createDepthFogShader()
 {
 	return m_specialShadersFactory->createShadowMapShader();
-}
-
-graphics::ShaderProgram * ContextImpl::createMonochromeShader()
-{
-	return m_specialShadersFactory->createMonochromeShader();
 }
 
 graphics::TexrectDrawerShaderProgram * ContextImpl::createTexrectDrawerDrawShader()
@@ -371,7 +380,7 @@ graphics::ShaderProgram * ContextImpl::createOrientationCorrectionShader()
 	return m_specialShadersFactory->createOrientationCorrectionShader();
 }
 
-graphics::ShaderProgram * ContextImpl::createTextDrawerShader()
+graphics::TextDrawerShaderProgram * ContextImpl::createTextDrawerShader()
 {
 	return m_specialShadersFactory->createTextDrawerShader();
 }

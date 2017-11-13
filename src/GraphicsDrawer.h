@@ -2,6 +2,9 @@
 #include <memory>
 #include <array>
 #include <vector>
+#include <list>
+#include <chrono>
+#include <string>
 #include "gSP.h"
 #include "TexrectDrawer.h"
 #include "Graphics/ObjectHandle.h"
@@ -31,6 +34,8 @@ struct RectVertex
 	float x, y, z, w;
 	float s0, t0, s1, t1;
 };
+
+typedef std::chrono::milliseconds Milliseconds;
 
 class GraphicsDrawer
 {
@@ -113,6 +118,8 @@ public:
 
 	void drawOSD();
 
+	void showMessage(std::string _message, Milliseconds _interval);
+
 	void clearDepthBuffer(u32 _ulx, u32 _uly, u32 _lrx, u32 _lry);
 
 	void clearColorBuffer(float * _pColor);
@@ -128,9 +135,14 @@ public:
 
 	SPVertex & getVertex(u32 _v) { return triangles.vertices[_v]; }
 
+	SPVertex * getVertexPtr(u32 _v) { return triangles.vertices.data() + _v; }
+
 	void setDMAVerticesSize(u32 _size) { if (m_dmaVertices.size() < _size) m_dmaVertices.resize(_size); }
 
 	SPVertex * getDMAVerticesData() { return m_dmaVertices.data(); }
+
+	SPVertex & getCurrentDMAVertex();
+	size_t getDMAVerticesCount() const { return m_dmaVerticesNum; }
 
 	void updateScissor(FrameBuffer * _pBuffer) const;
 
@@ -145,6 +157,7 @@ private:
 	friend TexrectDrawer;
 
 	GraphicsDrawer();
+	~GraphicsDrawer();
 
 	GraphicsDrawer(const GraphicsDrawer &) = delete;
 
@@ -155,7 +168,6 @@ private:
 	void _setSpecialTexrect() const;
 
 	void _setBlendMode() const;
-	void _legacySetBlendMode() const;
 	void _updateCullFace() const;
 	void _updateViewport() const;
 	void _updateScreenCoordsViewport() const;
@@ -169,6 +181,9 @@ private:
 
 	void _drawOSD(const char *_pText, float _x, float & _y);
 
+	typedef std::list<std::string> OSDMessages;
+	void _removeOSDMessage(OSDMessages::iterator _iter, Milliseconds _interval);
+
 	DrawingState m_drawingState;
 	TexturedRectParams m_texrectParams;
 
@@ -180,6 +195,7 @@ private:
 	} triangles;
 
 	std::vector<SPVertex> m_dmaVertices;
+	size_t m_dmaVerticesNum;
 
 	RectVertex m_rect[4];
 
@@ -188,4 +204,5 @@ private:
 	bool m_bImageTexture;
 	bool m_bFlatColors;
 	TexrectDrawer m_texrectDrawer;
+	OSDMessages m_osdMessages;
 };

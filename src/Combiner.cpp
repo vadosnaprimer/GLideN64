@@ -5,7 +5,7 @@
 #include <osal_files.h>
 
 #include "Combiner.h"
-#include "Debug.h"
+#include "DebugDump.h"
 #include "gDP.h"
 #include "Config.h"
 #include "PluginAPI.h"
@@ -92,11 +92,11 @@ CombinerInfo & CombinerInfo::get()
 
 void CombinerInfo::init()
 {
+	gfxContext.resetCombinerProgramBuilder();
 	m_pCurrent = nullptr;
-	m_bShaderCacheSupported = config.generalEmulation.enableShadersStorage != 0 && gfxContext.isSupported(SpecialFeatures::ShaderProgramBinary);
 
 	m_shadersLoaded = 0;
-	if (m_bShaderCacheSupported && !_loadShadersStorage()) {
+	if (config.generalEmulation.enableShadersStorage != 0 && !_loadShadersStorage()) {
 		for (auto cur = m_combiners.begin(); cur != m_combiners.end(); ++cur)
 			delete cur->second;
 		m_combiners.clear();
@@ -111,18 +111,16 @@ void CombinerInfo::init()
 	}
 
 	m_shadowmapProgram.reset(gfxContext.createDepthFogShader());
-	m_monochromeProgram.reset(gfxContext.createMonochromeShader());
 	m_texrectCopyProgram.reset(gfxContext.createTexrectCopyShader());
 }
 
 void CombinerInfo::destroy()
 {
 	m_shadowmapProgram.reset();
-	m_monochromeProgram.reset();
 	m_texrectCopyProgram.reset();
 
 	m_pCurrent = nullptr;
-	if (m_bShaderCacheSupported)
+	if (config.generalEmulation.enableShadersStorage != 0)
 		_saveShadersStorage();
 	m_shadersLoaded = 0;
 	for (auto cur = m_combiners.begin(); cur != m_combiners.end(); ++cur)
@@ -190,18 +188,16 @@ void SimplifyCycle( CombineCycle *cc, CombinerStage *stage )
 	}
 }
 
-//ShaderCombiner * CombinerInfo::_compile(u64 mux) const
-CombinerProgram * CombinerInfo::_compile(u64 mux) const
+graphics::CombinerProgram * Combiner_Compile(CombinerKey key)
 {
 	gDPCombine combine;
 
-	combine.mux = mux;
-
-	int numCycles;
+	combine.mux = key.getMux();
 
 	Combiner color, alpha;
 
-	numCycles = gDP.otherMode.cycleType + 1;
+	const u32 cycleType = key.getCycleType();
+	const u32 numCycles = cycleType + 1;
 	color.numStages = numCycles;
 	alpha.numStages = numCycles;
 
@@ -209,7 +205,7 @@ CombinerProgram * CombinerInfo::_compile(u64 mux) const
 	CombineCycle ac[2];
 
 	// Simplify each RDP combiner cycle into a combiner stage
-	if (gDP.otherMode.cycleType == G_CYC_1CYCLE) {
+	if (cycleType == G_CYC_1CYCLE) {
 		// 1 cycle mode uses combiner equations from 2nd cycle
 		u32 colorMux[4] = { saRGBExpanded[combine.saRGB1], sbRGBExpanded[combine.sbRGB1],
 							mRGBExpanded[combine.mRGB1], aRGBExpanded[combine.aRGB1] };
@@ -269,7 +265,7 @@ CombinerProgram * CombinerInfo::_compile(u64 mux) const
 		}
 	}
 
-	return gfxContext.createCombinerProgram(color, alpha, CombinerKey(mux));
+	return gfxContext.createCombinerProgram(color, alpha, key);
 }
 
 void CombinerInfo::update()
@@ -297,7 +293,7 @@ void CombinerInfo::setCombine(u64 _mux )
 	if (iter != m_combiners.end()) {
 		m_pCurrent = iter->second;
 	} else {
-		m_pCurrent = _compile(_mux);
+		m_pCurrent = Combiner_Compile(key);
 		m_pCurrent->update(true);
 		m_combiners[m_pCurrent->getKey()] = m_pCurrent;
 	}
@@ -317,17 +313,14 @@ void CombinerInfo::setDepthFogCombiner()
 	}
 }
 
-void CombinerInfo::setMonochromeCombiner()
-{
-	if (m_monochromeProgram) {
-		m_monochromeProgram->activate();
-		m_pCurrent = m_monochromeProgram.get();
-	}
-}
-
 ShaderProgram * CombinerInfo::getTexrectCopyProgram()
 {
 	return m_texrectCopyProgram.get();
+}
+
+bool CombinerInfo::isShaderCacheSupported() const
+{
+	return config.generalEmulation.enableShadersStorage != 0 && gfxContext.isSupported(SpecialFeatures::ShaderProgramBinary);
 }
 
 void CombinerInfo::setPolygonMode(DrawingState _drawingState)

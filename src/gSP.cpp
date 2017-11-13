@@ -4,7 +4,7 @@
 #include <assert.h>
 #include "N64.h"
 #include "GLideN64.h"
-#include "Debug.h"
+#include "DebugDump.h"
 #include "Types.h"
 #include "RSP.h"
 #include "GBI.h"
@@ -14,7 +14,7 @@
 #include "CRC.h"
 #include <string.h>
 #include "convert.h"
-#include "S2DEX.h"
+#include "uCodes/S2DEX.h"
 #include "VI.h"
 #include "FrameBuffer.h"
 #include "DepthBuffer.h"
@@ -29,6 +29,18 @@ using namespace std;
 using namespace graphics;
 
 #define INDEXMAP_SIZE 80U
+
+#define SP_STATUS_HALT 0x0001
+#define SP_STATUS_BROKE 0x0002
+#define SP_STATUS_TASKDONE 0x0200
+
+#ifdef __VEC4_OPT
+#define VEC_OPT 4U
+#else
+#define VEC_OPT 1U
+#endif
+
+static bool g_ConkerUcode;
 
 void gSPFlushTriangles()
 {
@@ -47,10 +59,20 @@ void gSPFlushTriangles()
 	}
 }
 
-void gSPCombineMatrices()
+static
+void _gSPCombineMatrices()
 {
 	MultMatrix(gSP.matrix.projection, gSP.matrix.modelView[gSP.matrix.modelViewi], gSP.matrix.combined);
 	gSP.changed &= ~CHANGED_MATRIX;
+}
+
+void gSPCombineMatrices(u32 _mode)
+{
+	if (_mode == 1)
+		_gSPCombineMatrices();
+	else
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Unknown gSPCombineMatrices mode: %u\n", _mode);
+	DebugMsg(DEBUG_NORMAL, "gSPCombineMatrices();\n");
 }
 
 void gSPTriangle(s32 v0, s32 v1, s32 v2)
@@ -67,6 +89,8 @@ void gSP1Triangle( const s32 v0, const s32 v1, const s32 v2)
 {
 	gSPTriangle( v0, v1, v2);
 	gSPFlushTriangles();
+
+	DebugMsg(DEBUG_NORMAL, "gSP1Triangle (%i, %i, %i)\n", v0, v1, v2);
 }
 
 void gSP2Triangles(const s32 v00, const s32 v01, const s32 v02, const s32 flag0,
@@ -75,6 +99,8 @@ void gSP2Triangles(const s32 v00, const s32 v01, const s32 v02, const s32 flag0,
 	gSPTriangle( v00, v01, v02);
 	gSPTriangle( v10, v11, v12);
 	gSPFlushTriangles();
+
+	DebugMsg(DEBUG_NORMAL, "gSP2Triangle (%i, %i, %i)-(%i, %i, %i)\n", v00, v01, v02, v10, v11, v12);
 }
 
 void gSP4Triangles(const s32 v00, const s32 v01, const s32 v02,
@@ -87,6 +113,9 @@ void gSP4Triangles(const s32 v00, const s32 v01, const s32 v02,
 	gSPTriangle(v20, v21, v22);
 	gSPTriangle(v30, v31, v32);
 	gSPFlushTriangles();
+
+	DebugMsg(DEBUG_NORMAL, "gSP4Triangle (%i, %i, %i)-(%i, %i, %i)-(%i, %i, %i)-(%i, %i, %i)\n",
+		v00, v01, v02, v10, v11, v12, v20, v21, v22, v30, v31, v32);
 }
 
 gSPInfo gSP;
@@ -100,548 +129,28 @@ f32 identityMatrix[4][4] =
 	{ 0.0f, 0.0f, 0.0f, 1.0f }
 };
 
-#ifdef __VEC4_OPT
-static void gSPTransformVertex4_default(u32 v, float mtx[4][4])
-{
-	float x, y, z, w;
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	for (int i = 0; i < 4; ++i) {
-		SPVertex & vtx = drawer.getVertex(v+i);
-		x = vtx.x;
-		y = vtx.y;
-		z = vtx.z;
-		w = vtx.w;
-		vtx.x = x * mtx[0][0] + y * mtx[1][0] + z * mtx[2][0] + mtx[3][0];
-		vtx.y = x * mtx[0][1] + y * mtx[1][1] + z * mtx[2][1] + mtx[3][1];
-		vtx.z = x * mtx[0][2] + y * mtx[1][2] + z * mtx[2][2] + mtx[3][2];
-		vtx.w = x * mtx[0][3] + y * mtx[1][3] + z * mtx[2][3] + mtx[3][3];
-	}
-}
-
-static void gSPLightVertex4_default(u32 v)
-{
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	if (!config.generalEmulation.enableHWLighting) {
-		for(int j = 0; j < 4; ++j) {
-			SPVertex & vtx = drawer.getVertex(v+j);
-			vtx.r = gSP.lights.rgb[gSP.numLights][R];
-			vtx.g = gSP.lights.rgb[gSP.numLights][G];
-			vtx.b = gSP.lights.rgb[gSP.numLights][B];
-			vtx.HWLight = 0;
-
-			for (int i = 0; i < gSP.numLights; ++i) {
-				f32 intensity = DotProduct( &vtx.nx, gSP.lights.i_xyz[i] );
-				if (intensity < 0.0f)
-					intensity = 0.0f;
-				vtx.r += gSP.lights.rgb[i][R] * intensity;
-				vtx.g += gSP.lights.rgb[i][G] * intensity;
-				vtx.b += gSP.lights.rgb[i][B] * intensity;
-			}
-			vtx.r = min(1.0f, vtx.r);
-			vtx.g = min(1.0f, vtx.g);
-			vtx.b = min(1.0f, vtx.b);
-		}
-	} else {
-		for(int j = 0; j < 4; ++j) {
-			SPVertex & vtx = drawer.getVertex(v+j);
-			vtx.HWLight = gSP.numLights;
-			vtx.r = vtx.nx;
-			vtx.g = vtx.ny;
-			vtx.b = vtx.nz;
-		}
-	}
-}
-
-static void gSPPointLightVertex4_default(u32 v, float _vPos[4][3])
-{
-	assert(_vPos != nullptr);
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	for(int j = 0; j < 4; ++j) {
-		SPVertex & vtx = drawer.getVertex(v+j);
-		float light_intensity = 0.0f;
-		vtx.HWLight = 0;
-		vtx.r = gSP.lights.rgb[gSP.numLights][R];
-		vtx.g = gSP.lights.rgb[gSP.numLights][G];
-		vtx.b = gSP.lights.rgb[gSP.numLights][B];
-		for (u32 l=0; l < gSP.numLights; ++l) {
-			if (gSP.lights.ca[l] != 0.0f) {
-				float lvec[3] = {gSP.lights.pos_xyzw[l][X], gSP.lights.pos_xyzw[l][Y], gSP.lights.pos_xyzw[l][Z]};
-				lvec[0] -= _vPos[j][0];
-				lvec[1] -= _vPos[j][1];
-				lvec[2] -= _vPos[j][2];
-				const float light_len2 = (lvec[0] * lvec[0] + lvec[1] * lvec[1] + lvec[2] * lvec[2]) / 65535.0f;
-				const float light_len = sqrtf(light_len2);
-				const float at = gSP.lights.ca[l] + light_len*gSP.lights.la[l] + light_len2*gSP.lights.qa[l];
-				if (at > 0.0f)
-					light_intensity = 1/at;
-				else
-					light_intensity = 0.0f;
-				if (light_intensity > 0.0f) {
-					vtx.r += gSP.lights.rgb[l][R] * light_intensity;
-					vtx.g += gSP.lights.rgb[l][G] * light_intensity;
-					vtx.b += gSP.lights.rgb[l][B] * light_intensity;
-				}
-			} else {
-				f32 intensity = DotProduct(&vtx.nx, gSP.lights.i_xyz[l]);
-				if (intensity < 0.0f)
-					intensity = 0.0f;
-				vtx.r += gSP.lights.rgb[l][R] * intensity;
-				vtx.g += gSP.lights.rgb[l][G] * intensity;
-				vtx.b += gSP.lights.rgb[l][B] * intensity;
-			}
-		}
-		if (vtx.r > 1.0f) vtx.r = 1.0f;
-		if (vtx.g > 1.0f) vtx.g = 1.0f;
-		if (vtx.b > 1.0f) vtx.b = 1.0f;
-	}
-}
-
-static void gSPLightVertex4_CBFD(u32 v)
-{
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	for(int j = 0; j < 4; ++j) {
-		SPVertex & vtx = drawer.getVertex(v+j);
-		f32 r = gSP.lights.rgb[gSP.numLights][R];
-		f32 g = gSP.lights.rgb[gSP.numLights][G];
-		f32 b = gSP.lights.rgb[gSP.numLights][B];
-
-		for (u32 l = 0; l < gSP.numLights; ++l) {
-			const f32 vx = (vtx.x + gSP.vertexCoordMod[ 8])*gSP.vertexCoordMod[12] - gSP.lights.pos_xyzw[l][X];
-			const f32 vy = (vtx.y + gSP.vertexCoordMod[ 9])*gSP.vertexCoordMod[13] - gSP.lights.pos_xyzw[l][Y];
-			const f32 vz = (vtx.z + gSP.vertexCoordMod[10])*gSP.vertexCoordMod[14] - gSP.lights.pos_xyzw[l][Z];
-			const f32 vw = (vtx.w + gSP.vertexCoordMod[11])*gSP.vertexCoordMod[15] - gSP.lights.pos_xyzw[l][W];
-			const f32 len = (vx*vx+vy*vy+vz*vz+vw*vw)/65536.0f;
-			f32 intensity = gSP.lights.ca[l] / len;
-			if (intensity > 1.0f) intensity = 1.0f;
-			r += gSP.lights.rgb[l][R] * intensity;
-			g += gSP.lights.rgb[l][G] * intensity;
-			b += gSP.lights.rgb[l][B] * intensity;
-		}
-
-		r = min(1.0f, r);
-		g = min(1.0f, g);
-		b = min(1.0f, b);
-
-		vtx.r *= r;
-		vtx.g *= g;
-		vtx.b *= b;
-		vtx.HWLight = 0;
-	}
-}
-
-static void gSPPointLightVertex4_CBFD(u32 v, float _vPos[4][3])
-{
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	for(int j = 0; j < 4; ++j) {
-		SPVertex & vtx = drawer.getVertex(v+j);
-		f32 r = gSP.lights.rgb[gSP.numLights][R];
-		f32 g = gSP.lights.rgb[gSP.numLights][G];
-		f32 b = gSP.lights.rgb[gSP.numLights][B];
-
-		f32 intensity = 0.0f;
-		for (u32 l = 0; l < gSP.numLights-1; ++l) {
-			intensity = DotProduct( &vtx.nx, gSP.lights.xyz[l] );
-			if ((gSP.lights.rgb[l][R] == 0.0f && gSP.lights.rgb[l][G] == 0.0f && gSP.lights.rgb[l][B] == 0.0f) || intensity < 0.0f)
-				continue;
-			if (gSP.lights.ca[l] > 0.0f) {
-				const f32 vx = (vtx.x + gSP.vertexCoordMod[ 8])*gSP.vertexCoordMod[12] - gSP.lights.pos_xyzw[l][X];
-				const f32 vy = (vtx.y + gSP.vertexCoordMod[ 9])*gSP.vertexCoordMod[13] - gSP.lights.pos_xyzw[l][Y];
-				const f32 vz = (vtx.z + gSP.vertexCoordMod[10])*gSP.vertexCoordMod[14] - gSP.lights.pos_xyzw[l][Z];
-				const f32 vw = (vtx.w + gSP.vertexCoordMod[11])*gSP.vertexCoordMod[15] - gSP.lights.pos_xyzw[l][W];
-				const f32 len = (vx*vx+vy*vy+vz*vz+vw*vw)/65536.0f;
-				float p_i = gSP.lights.ca[l] / len;
-				if (p_i > 1.0f) p_i = 1.0f;
-				intensity *= p_i;
-			}
-			r += gSP.lights.rgb[l][R] * intensity;
-			g += gSP.lights.rgb[l][G] * intensity;
-			b += gSP.lights.rgb[l][B] * intensity;
-		}
-		
-		intensity = DotProduct( &vtx.nx, gSP.lights.i_xyz[gSP.numLights-1] );
-		if ((gSP.lights.i_xyz[gSP.numLights-1][R] != 0.0 || gSP.lights.i_xyz[gSP.numLights-1][G] != 0.0 || gSP.lights.i_xyz[gSP.numLights-1][B] != 0.0) && intensity > 0) {
-			r += gSP.lights.rgb[gSP.numLights-1][R] * intensity;
-			g += gSP.lights.rgb[gSP.numLights-1][G] * intensity;
-			b += gSP.lights.rgb[gSP.numLights-1][B] * intensity;
-		}
-
-		r = min(1.0f, r);
-		g = min(1.0f, g);
-		b = min(1.0f, b);
-
-		vtx.r *= r;
-		vtx.g *= g;
-		vtx.b *= b;
-		vtx.HWLight = 0;
-	}
-}
-
-static void gSPBillboardVertex4_default(u32 v)
-{
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	int i = 0;
-	SPVertex & vtx0 = drawer.getVertex(i);
-	for (int j = 0; j < 4; ++j) {
-		SPVertex & vtx = drawer.getVertex(v+j);
-		vtx.x += vtx0.x;
-		vtx.y += vtx0.y;
-		vtx.z += vtx0.z;
-		vtx.w += vtx0.w;
-	}
-}
-
-void gSPClipVertex4(u32 v)
-{
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	for(int i = 0; i < 4; ++i) {
-		SPVertex & vtx = drawer.getVertex(v+i);
-		vtx.clip = 0;
-		if (vtx.x > +vtx.w) vtx.clip |= CLIP_POSX;
-		if (vtx.x < -vtx.w) vtx.clip |= CLIP_NEGX;
-		if (vtx.y > +vtx.w) vtx.clip |= CLIP_POSY;
-		if (vtx.y < -vtx.w) vtx.clip |= CLIP_NEGY;
-		if (vtx.w < 0.01f) vtx.clip |= CLIP_W;
-	}
-}
-
-void gSPProcessVertex4(u32 v)
-{
-	if (gSP.changed & CHANGED_MATRIX)
-		gSPCombineMatrices();
-
-	DisplayWindow & wnd = dwnd();
-	GraphicsDrawer & drawer = wnd.getDrawer();
-	float vPos[4][3];
-	for(int i = 0; i < 4; ++i) {
-		SPVertex & vtx = drawer.getVertex(v+i);
-		vPos[i][0] = vtx.x;
-		vPos[i][1] = vtx.y;
-		vPos[i][2] = vtx.z;
-		vtx.modify = 0;
-	}
-	gSPTransformVertex4(v, gSP.matrix.combined );
-
-	if (wnd.isAdjustScreen() && (gDP.colorImage.width > VI.width * 98 / 100)) {
-		for(int i = 0; i < 4; ++i) {
-			SPVertex & vtx = drawer.getVertex(v+i);
-			vtx.x *= wnd.getAdjustScale();
-			if (gSP.matrix.projection[3][2] == -1.f)
-				vtx.w *= wnd.getAdjustScale();
-		}
-	}
-
-	if (gSP.viewport.vscale[0] < 0) {
-		for(int i = 0; i < 4; ++i) {
-			SPVertex & vtx = drawer.getVertex(v+i);
-			vtx.x = -vtx.x;
-		}
-	}
-	if (gSP.viewport.vscale[1] < 0) {
-		for(int i = 0; i < 4; ++i) {
-			SPVertex & vtx = drawer.getVertex(v+i);
-			vtx.y = -vtx.y;
-		}
-	}
-
-	if (gSP.matrix.billboard)
-		gSPBillboardVertex4(v);
-
-	if (gSP.geometryMode & G_LIGHTING) {
-		if (gSP.geometryMode & G_POINT_LIGHTING)
-			gSPPointLightVertex4(v, vPos);
-		else
-			gSPLightVertex4(v);
-
-		if (GBI.isTextureGen() && (gSP.geometryMode & G_TEXTURE_GEN) != 0) {
-			for(int i = 0; i < 4; ++i) {
-				SPVertex & vtx = drawer.getVertex(v+i);
-				f32 fLightDir[3] = {vtx.nx, vtx.ny, vtx.nz};
-				f32 x, y;
-				if (gSP.lookatEnable) {
-					x = DotProduct(gSP.lookat.i_xyz[0], fLightDir);
-					y = DotProduct(gSP.lookat.i_xyz[1], fLightDir);
-				} else {
-					fLightDir[0] *= 128.0f;
-					fLightDir[1] *= 128.0f;
-					fLightDir[2] *= 128.0f;
-					TransformVectorNormalize(fLightDir, gSP.matrix.modelView[gSP.matrix.modelViewi]);
-					x = fLightDir[0];
-					y = fLightDir[1];
-				}
-				if (gSP.geometryMode & G_TEXTURE_GEN_LINEAR) {
-					vtx.s = acosf(-x) * 325.94931f;
-					vtx.t = acosf(-y) * 325.94931f;
-				} else { // G_TEXTURE_GEN
-					vtx.s = (x + 1.0f) * 512.0f;
-					vtx.t = (y + 1.0f) * 512.0f;
-				}
-			}
-		}
-	} else {
-		for(int i = 0; i < 4; ++i)
-			drawer.getVertex(v+i).HWLight = 0;
-	}
-
-	gSPClipVertex4(v);
-}
-
-#endif //__VEC4_OPT
-
-static void gSPTransformVertex_default(float vtx[4], float mtx[4][4])
-{
-	float x, y, z, w;
-	x = vtx[0];
-	y = vtx[1];
-	z = vtx[2];
-	w = vtx[3];
-
-	vtx[0] = x * mtx[0][0] + y * mtx[1][0] + z * mtx[2][0] + mtx[3][0];
-	vtx[1] = x * mtx[0][1] + y * mtx[1][1] + z * mtx[2][1] + mtx[3][1];
-	vtx[2] = x * mtx[0][2] + y * mtx[1][2] + z * mtx[2][2] + mtx[3][2];
-	vtx[3] = x * mtx[0][3] + y * mtx[1][3] + z * mtx[2][3] + mtx[3][3];
-}
-
-static void gSPLightVertex_default(SPVertex & _vtx)
-{
-	if (config.generalEmulation.enableHWLighting == 0) {
-		_vtx.HWLight = 0;
-		_vtx.r = gSP.lights.rgb[gSP.numLights][R];
-		_vtx.g = gSP.lights.rgb[gSP.numLights][G];
-		_vtx.b = gSP.lights.rgb[gSP.numLights][B];
-		for (int i = 0; i < gSP.numLights; ++i){
-			f32 intensity = DotProduct( &_vtx.nx, gSP.lights.i_xyz[i] );
-			if (intensity < 0.0f)
-				intensity = 0.0f;
-			_vtx.r += gSP.lights.rgb[i][R] * intensity;
-			_vtx.g += gSP.lights.rgb[i][G] * intensity;
-			_vtx.b += gSP.lights.rgb[i][B] * intensity;
-		}
-		_vtx.r = min(1.0f, _vtx.r);
-		_vtx.g = min(1.0f, _vtx.g);
-		_vtx.b = min(1.0f, _vtx.b);
-	} else {
-		_vtx.HWLight = gSP.numLights;
-		_vtx.r = _vtx.nx;
-		_vtx.g = _vtx.ny;
-		_vtx.b = _vtx.nz;
-	}
-}
-
-static void gSPPointLightVertex_default(SPVertex & _vtx, float * _vPos)
-{
-	assert(_vPos != nullptr);
-	float light_intensity = 0.0f;
-	_vtx.HWLight = 0;
-	_vtx.r = gSP.lights.rgb[gSP.numLights][R];
-	_vtx.g = gSP.lights.rgb[gSP.numLights][G];
-	_vtx.b = gSP.lights.rgb[gSP.numLights][B];
-	for (u32 l=0; l < gSP.numLights; ++l) {
-		if (gSP.lights.ca[l] != 0.0f) {
-			float lvec[3] = {gSP.lights.pos_xyzw[l][X], gSP.lights.pos_xyzw[l][Y], gSP.lights.pos_xyzw[l][Z]};
-			lvec[0] -= _vPos[0];
-			lvec[1] -= _vPos[1];
-			lvec[2] -= _vPos[2];
-			const float light_len2 = (lvec[0] * lvec[0] + lvec[1] * lvec[1] + lvec[2] * lvec[2]) / 65535.0f;
-			const float light_len = sqrtf(light_len2);
-			const float at = gSP.lights.ca[l] + light_len*gSP.lights.la[l] + light_len2*gSP.lights.qa[l];
-			if (at > 0.0f)
-				light_intensity = 1/at;//DotProduct (lvec, nvec) / (light_len * normal_len * at);
-			else
-				light_intensity = 0.0f;
-			if (light_intensity > 0.0f) {
-				_vtx.r += gSP.lights.rgb[l][R] * light_intensity;
-				_vtx.g += gSP.lights.rgb[l][G] * light_intensity;
-				_vtx.b += gSP.lights.rgb[l][B] * light_intensity;
-			}
-		} else {
-			f32 intensity = DotProduct(&_vtx.nx, gSP.lights.i_xyz[l]);
-			if (intensity < 0.0f)
-				intensity = 0.0f;
-			_vtx.r += gSP.lights.rgb[l][R] * intensity;
-			_vtx.g += gSP.lights.rgb[l][G] * intensity;
-			_vtx.b += gSP.lights.rgb[l][B] * intensity;
-		}
-	}
-	if (_vtx.r > 1.0f) _vtx.r = 1.0f;
-	if (_vtx.g > 1.0f) _vtx.g = 1.0f;
-	if (_vtx.b > 1.0f) _vtx.b = 1.0f;
-}
-
-static void gSPLightVertex_CBFD(SPVertex & _vtx)
-{
-	f32 r = gSP.lights.rgb[gSP.numLights][R];
-	f32 g = gSP.lights.rgb[gSP.numLights][G];
-	f32 b = gSP.lights.rgb[gSP.numLights][B];
-
-	for (u32 l = 0; l < gSP.numLights; ++l) {
-		const f32 vx = (_vtx.x + gSP.vertexCoordMod[ 8])*gSP.vertexCoordMod[12] - gSP.lights.pos_xyzw[l][X];
-		const f32 vy = (_vtx.y + gSP.vertexCoordMod[ 9])*gSP.vertexCoordMod[13] - gSP.lights.pos_xyzw[l][Y];
-		const f32 vz = (_vtx.z + gSP.vertexCoordMod[10])*gSP.vertexCoordMod[14] - gSP.lights.pos_xyzw[l][Z];
-		const f32 vw = (_vtx.w + gSP.vertexCoordMod[11])*gSP.vertexCoordMod[15] - gSP.lights.pos_xyzw[l][W];
-		const f32 len = (vx*vx+vy*vy+vz*vz+vw*vw)/65536.0f;
-		f32 intensity = gSP.lights.ca[l] / len;
-		if (intensity > 1.0f) intensity = 1.0f;
-		r += gSP.lights.rgb[l][R] * intensity;
-		g += gSP.lights.rgb[l][G] * intensity;
-		b += gSP.lights.rgb[l][B] * intensity;
-	}
-
-	r = min(1.0f, r);
-	g = min(1.0f, g);
-	b = min(1.0f, b);
-
-	_vtx.r *= r;
-	_vtx.g *= g;
-	_vtx.b *= b;
-	_vtx.HWLight = 0;
-}
-
-static void gSPPointLightVertex_CBFD(SPVertex & _vtx, float * /*_vPos*/)
-{
-	f32 r = gSP.lights.rgb[gSP.numLights][R];
-	f32 g = gSP.lights.rgb[gSP.numLights][G];
-	f32 b = gSP.lights.rgb[gSP.numLights][B];
-
-	f32 intensity = 0.0f;
-	for (u32 l = 0; l < gSP.numLights-1; ++l) {
-		intensity = DotProduct( &_vtx.nx, gSP.lights.rgb[l] );
-		if ((gSP.lights.rgb[l][R] == 0.0f && gSP.lights.rgb[l][G] == 0.0f && gSP.lights.rgb[l][B] == 0.0f) || intensity < 0.0f)
-			continue;
-		if (gSP.lights.ca[l] > 0.0f) {
-			const f32 vx = (_vtx.x + gSP.vertexCoordMod[ 8])*gSP.vertexCoordMod[12] - gSP.lights.pos_xyzw[l][X];
-			const f32 vy = (_vtx.y + gSP.vertexCoordMod[ 9])*gSP.vertexCoordMod[13] - gSP.lights.pos_xyzw[l][Y];
-			const f32 vz = (_vtx.z + gSP.vertexCoordMod[10])*gSP.vertexCoordMod[14] - gSP.lights.pos_xyzw[l][Z];
-			const f32 vw = (_vtx.w + gSP.vertexCoordMod[11])*gSP.vertexCoordMod[15] - gSP.lights.pos_xyzw[l][W];
-			const f32 len = (vx*vx+vy*vy+vz*vz+vw*vw)/65536.0f;
-			float p_i = gSP.lights.ca[l] / len;
-			if (p_i > 1.0f) p_i = 1.0f;
-			intensity *= p_i;
-		}
-		r += gSP.lights.rgb[l][R] * intensity;
-		g += gSP.lights.rgb[l][G] * intensity;
-		b += gSP.lights.rgb[l][B] * intensity;
-	}
-	intensity = DotProduct( &_vtx.nx, gSP.lights.i_xyz[gSP.numLights-1] );
-	if ((gSP.lights.rgb[gSP.numLights-1][R] != 0.0 || gSP.lights.rgb[gSP.numLights-1][G] != 0.0 || gSP.lights.rgb[gSP.numLights-1][B] != 0.0) && intensity > 0) {
-		r += gSP.lights.rgb[gSP.numLights-1][R] * intensity;
-		g += gSP.lights.rgb[gSP.numLights-1][G] * intensity;
-		b += gSP.lights.rgb[gSP.numLights-1][B] * intensity;
-	}
-
-	r = min(1.0f, r);
-	g = min(1.0f, g);
-	b = min(1.0f, b);
-
-	_vtx.r *= r;
-	_vtx.g *= g;
-	_vtx.b *= b;
-	_vtx.HWLight = 0;
-}
-
-static void gSPBillboardVertex_default(u32 v, u32 i)
-{
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	SPVertex & vtx0 = drawer.getVertex(i);
-	SPVertex & vtx = drawer.getVertex(v);
-	vtx.x += vtx0.x;
-	vtx.y += vtx0.y;
-	vtx.z += vtx0.z;
-	vtx.w += vtx0.w;
-}
-
-void gSPClipVertex(u32 v)
-{
-	SPVertex & vtx = dwnd().getDrawer().getVertex(v);
-	vtx.clip = 0;
-	if (vtx.x > +vtx.w) vtx.clip |= CLIP_POSX;
-	if (vtx.x < -vtx.w) vtx.clip |= CLIP_NEGX;
-	if (vtx.y > +vtx.w) vtx.clip |= CLIP_POSY;
-	if (vtx.y < -vtx.w) vtx.clip |= CLIP_NEGY;
-	if (vtx.w < 0.01f)  vtx.clip |= CLIP_W;
-}
-
-void gSPProcessVertex(u32 v)
-{
-	if (gSP.changed & CHANGED_MATRIX)
-		gSPCombineMatrices();
-
-	DisplayWindow & wnd = dwnd();
-	GraphicsDrawer & drawer = wnd.getDrawer();
-	SPVertex & vtx = drawer.getVertex(v);
-	float vPos[3] = {(float)vtx.x, (float)vtx.y, (float)vtx.z};
-	gSPTransformVertex( &vtx.x, gSP.matrix.combined );
-
-	if (wnd.isAdjustScreen() && (gDP.colorImage.width > VI.width * 98 / 100)) {
-		vtx.x *= wnd.getAdjustScale();
-		if (gSP.matrix.projection[3][2] == -1.f)
-			vtx.w *= wnd.getAdjustScale();
-	}
-
-	if (gSP.viewport.vscale[0] < 0)
-		vtx.x = -vtx.x;
-	if (gSP.viewport.vscale[1] < 0)
-		vtx.y = -vtx.y;
-
-	if (gSP.matrix.billboard) {
-		int i = 0;
-		gSPBillboardVertex(v, i);
-	}
-
-	gSPClipVertex(v);
-	vtx.modify = 0;
-
-	if (gSP.geometryMode & G_LIGHTING) {
-		if (gSP.geometryMode & G_POINT_LIGHTING)
-			gSPPointLightVertex(vtx, vPos);
-		else
-			gSPLightVertex(vtx);
-
-		if (GBI.isTextureGen() && (gSP.geometryMode & G_TEXTURE_GEN) != 0) {
-			f32 fLightDir[3] = {vtx.nx, vtx.ny, vtx.nz};
-			f32 x, y;
-			if (gSP.lookatEnable) {
-				x = DotProduct(gSP.lookat.i_xyz[0], fLightDir);
-				y = DotProduct(gSP.lookat.i_xyz[1], fLightDir);
-			} else {
-				fLightDir[0] *= 128.0f;
-				fLightDir[1] *= 128.0f;
-				fLightDir[2] *= 128.0f;
-				TransformVectorNormalize(fLightDir, gSP.matrix.modelView[gSP.matrix.modelViewi]);
-				x = fLightDir[0];
-				y = fLightDir[1];
-			}
-			if (gSP.geometryMode & G_TEXTURE_GEN_LINEAR) {
-				vtx.s = acosf(-x) * 325.94931f;
-				vtx.t = acosf(-y) * 325.94931f;
-			} else { // G_TEXTURE_GEN
-				vtx.s = (x + 1.0f) * 512.0f;
-				vtx.t = (y + 1.0f) * 512.0f;
-			}
-		}
-	} else
-		vtx.HWLight = 0;
-}
-
 void gSPLoadUcodeEx( u32 uc_start, u32 uc_dstart, u16 uc_dsize )
 {
 	gSP.matrix.modelViewi = 0;
-	gSP.changed |= CHANGED_MATRIX;
+	gSP.changed |= CHANGED_MATRIX | CHANGED_LIGHT | CHANGED_LOOKAT;
 	gSP.status[0] = gSP.status[1] = gSP.status[2] = gSP.status[3] = 0;
 
-	if ((((uc_start & 0x1FFFFFFF) + 4096) > RDRAMSize) || (((uc_dstart & 0x1FFFFFFF) + uc_dsize) > RDRAMSize))
+	if ((((uc_start & 0x1FFFFFFF) + 4096) > RDRAMSize) || (((uc_dstart & 0x1FFFFFFF) + uc_dsize) > RDRAMSize)) {
+		DebugMsg(DEBUG_NORMAL|DEBUG_ERROR, "gSPLoadUcodeEx out of RDRAM\n");
 		return;
+	}
 
 	GBI.loadMicrocode(uc_start, uc_dstart, uc_dsize);
 	RSP.uc_start = uc_start;
 	RSP.uc_dstart = uc_dstart;
+
+	DebugMsg(DEBUG_NORMAL, "gSPLoadUcodeEx type: %d\n", GBI.getMicrocodeType());
 }
 
 void gSPNoOp()
 {
 	gSPFlushTriangles();
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_IGNORED, "gSPNoOp();\n" );
-#endif
+	DebugMsg(DEBUG_NORMAL | DEBUG_IGNORED, "gSPNoOp();\n");
 }
 
 void gSPMatrix( u32 matrix, u8 param )
@@ -651,14 +160,12 @@ void gSPMatrix( u32 matrix, u8 param )
 	u32 address = RSP_SegmentToPhysical( matrix );
 
 	if (address + 64 > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR | DEBUG_MATRIX, "// Attempting to load matrix from invalid address\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_MATRIX, "gSPMatrix( 0x%08X, %s | %s | %s );\n",
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to load matrix from invalid address\n");
+		DebugMsg(DEBUG_NORMAL, "gSPMatrix( 0x%08X, %s | %s | %s );\n",
 			matrix,
 			(param & G_MTX_PROJECTION) ? "G_MTX_PROJECTION" : "G_MTX_MODELVIEW",
 			(param & G_MTX_LOAD) ? "G_MTX_LOAD" : "G_MTX_MUL",
 			(param & G_MTX_PUSH) ? "G_MTX_PUSH" : "G_MTX_NOPUSH" );
-#endif
 		return;
 	}
 
@@ -670,14 +177,13 @@ void gSPMatrix( u32 matrix, u8 param )
 		else
 			MultMatrix2( gSP.matrix.projection, mtx );
 	} else {
-		if ((param & G_MTX_PUSH) && (gSP.matrix.modelViewi < (gSP.matrix.stackSize))) {
-			CopyMatrix( gSP.matrix.modelView[gSP.matrix.modelViewi + 1], gSP.matrix.modelView[gSP.matrix.modelViewi] );
-			gSP.matrix.modelViewi++;
+		if ((param & G_MTX_PUSH)) {
+			if (gSP.matrix.modelViewi < (gSP.matrix.stackSize)) {
+				CopyMatrix(gSP.matrix.modelView[gSP.matrix.modelViewi + 1], gSP.matrix.modelView[gSP.matrix.modelViewi]);
+				gSP.matrix.modelViewi++;
+			} else
+				DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Modelview stack overflow\n");
 		}
-#ifdef DEBUG
-		else
-			DebugMsg( DEBUG_ERROR | DEBUG_MATRIX, "// Modelview stack overflow\n" );
-#endif
 
 		if (param & G_MTX_LOAD)
 			CopyMatrix( gSP.matrix.modelView[gSP.matrix.modelViewi], mtx );
@@ -688,21 +194,19 @@ void gSPMatrix( u32 matrix, u8 param )
 
 	gSP.changed |= CHANGED_MATRIX;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED | DEBUG_MATRIX, "// %12.6f %12.6f %12.6f %12.6f\n",
-		mtx[0][0], mtx[0][1], mtx[0][2], mtx[0][3] );
-	DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED | DEBUG_MATRIX, "// %12.6f %12.6f %12.6f %12.6f\n",
-		mtx[1][0], mtx[1][1], mtx[1][2], mtx[1][3] );
-	DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED | DEBUG_MATRIX, "// %12.6f %12.6f %12.6f %12.6f\n",
-		mtx[2][0], mtx[2][1], mtx[2][2], mtx[2][3] );
-	DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED | DEBUG_MATRIX, "// %12.6f %12.6f %12.6f %12.6f\n",
-		mtx[3][0], mtx[3][1], mtx[3][2], mtx[3][3] );
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_MATRIX, "gSPMatrix( 0x%08X, %s | %s | %s );\n",
+	DebugMsg(DEBUG_NORMAL, "gSPMatrix( 0x%08X, %s | %s | %s );\n",
 		matrix,
 		(param & G_MTX_PROJECTION) ? "G_MTX_PROJECTION" : "G_MTX_MODELVIEW",
 		(param & G_MTX_LOAD) ? "G_MTX_LOAD" : "G_MTX_MUL",
-		(param & G_MTX_PUSH) ? "G_MTX_PUSH" : "G_MTX_NOPUSH" );
-#endif
+		(param & G_MTX_PUSH) ? "G_MTX_PUSH" : "G_MTX_NOPUSH");
+	DebugMsg(DEBUG_DETAIL, "// %12.6f %12.6f %12.6f %12.6f\n",
+		mtx[0][0], mtx[0][1], mtx[0][2], mtx[0][3] );
+	DebugMsg( DEBUG_DETAIL, "// %12.6f %12.6f %12.6f %12.6f\n",
+		mtx[1][0], mtx[1][1], mtx[1][2], mtx[1][3] );
+	DebugMsg( DEBUG_DETAIL, "// %12.6f %12.6f %12.6f %12.6f\n",
+		mtx[2][0], mtx[2][1], mtx[2][2], mtx[2][3] );
+	DebugMsg( DEBUG_DETAIL, "// %12.6f %12.6f %12.6f %12.6f\n",
+		mtx[3][0], mtx[3][1], mtx[3][2], mtx[3][3] );
 }
 
 void gSPDMAMatrix( u32 matrix, u8 index, u8 multiply )
@@ -711,11 +215,9 @@ void gSPDMAMatrix( u32 matrix, u8 index, u8 multiply )
 	u32 address = gSP.DMAOffsets.mtx + RSP_SegmentToPhysical( matrix );
 
 	if (address + 64 > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR | DEBUG_MATRIX, "// Attempting to load matrix from invalid address\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_MATRIX, "gSPDMAMatrix( 0x%08X, %i, %s );\n",
-			matrix, index, multiply ? "TRUE" : "FALSE" );
-#endif
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to load matrix from invalid address\n");
+		DebugMsg(DEBUG_NORMAL, "gSPDMAMatrix( 0x%08X, %i, %s );\n",
+			matrix, index, multiply ? "TRUE" : "FALSE");
 		return;
 	}
 
@@ -731,19 +233,18 @@ void gSPDMAMatrix( u32 matrix, u8 index, u8 multiply )
 	CopyMatrix( gSP.matrix.projection, identityMatrix );
 
 
-	gSP.changed |= CHANGED_MATRIX;
-#ifdef DEBUG
-	DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED | DEBUG_MATRIX, "// %12.6f %12.6f %12.6f %12.6f\n",
+	gSP.changed |= CHANGED_MATRIX | CHANGED_LIGHT | CHANGED_LOOKAT;
+
+	DebugMsg(DEBUG_NORMAL, "gSPDMAMatrix( 0x%08X, %i, %s );\n",
+		matrix, index, multiply ? "TRUE" : "FALSE");
+	DebugMsg(DEBUG_DETAIL, "// %12.6f %12.6f %12.6f %12.6f\n",
 		mtx[0][0], mtx[0][1], mtx[0][2], mtx[0][3] );
-	DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED | DEBUG_MATRIX, "// %12.6f %12.6f %12.6f %12.6f\n",
+	DebugMsg( DEBUG_DETAIL, "// %12.6f %12.6f %12.6f %12.6f\n",
 		mtx[1][0], mtx[1][1], mtx[1][2], mtx[1][3] );
-	DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED | DEBUG_MATRIX, "// %12.6f %12.6f %12.6f %12.6f\n",
+	DebugMsg( DEBUG_DETAIL, "// %12.6f %12.6f %12.6f %12.6f\n",
 		mtx[2][0], mtx[2][1], mtx[2][2], mtx[2][3] );
-	DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED | DEBUG_MATRIX, "// %12.6f %12.6f %12.6f %12.6f\n",
+	DebugMsg( DEBUG_DETAIL, "// %12.6f %12.6f %12.6f %12.6f\n",
 		mtx[3][0], mtx[3][1], mtx[3][2], mtx[3][3] );
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_MATRIX, "gSPDMAMatrix( 0x%08X, %i, %s );\n",
-		matrix, index, multiply ? "TRUE" : "FALSE" );
-#endif
 }
 
 void gSPViewport( u32 v )
@@ -751,10 +252,8 @@ void gSPViewport( u32 v )
 	u32 address = RSP_SegmentToPhysical( v );
 
 	if ((address + 16) > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR, "// Attempting to load viewport from invalid address\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPViewport( 0x%08X );\n", v );
-#endif
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to load viewport from invalid address\n");
+		DebugMsg(DEBUG_NORMAL, "gSPViewport( 0x%08X );\n", v);
 		return;
 	}
 
@@ -767,7 +266,7 @@ void gSPViewport( u32 v )
 	gSP.viewport.vtrans[2] = _FIXED2FLOAT( *(s16*)&RDRAM[address + 14], 10 );// * 0.00097847357f;
 	gSP.viewport.vtrans[3] = *(s16*)&RDRAM[address + 12];
 
-	if ((config.generalEmulation.hacks & hack_NegativeViewport) != 0 && gSP.viewport.vscale[1] < 0.0f)
+	if (gSP.viewport.vscale[1] < 0.0f && !GBI.isNegativeY())
 		gSP.viewport.vscale[1] = -gSP.viewport.vscale[1];
 
 	gSP.viewport.x		= gSP.viewport.vtrans[0] - gSP.viewport.vscale[0];
@@ -779,9 +278,9 @@ void gSPViewport( u32 v )
 
 	gSP.changed |= CHANGED_VIEWPORT;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPViewport( 0x%08X );\n", v );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPViewport scale(%02f, %02f, %02f), trans(%02f, %02f, %02f)\n",
+		gSP.viewport.vscale[0], gSP.viewport.vscale[1], gSP.viewport.vscale[2],
+		gSP.viewport.vtrans[0], gSP.viewport.vtrans[1], gSP.viewport.vtrans[2]);
 }
 
 void gSPForceMatrix( u32 mptr )
@@ -789,10 +288,8 @@ void gSPForceMatrix( u32 mptr )
 	u32 address = RSP_SegmentToPhysical( mptr );
 
 	if (address + 64 > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR | DEBUG_MATRIX, "// Attempting to load from invalid address" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_MATRIX, "gSPForceMatrix( 0x%08X );\n", mptr );
-#endif
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to load from invalid address");
+		DebugMsg(DEBUG_NORMAL, "gSPForceMatrix( 0x%08X );\n", mptr);
 		return;
 	}
 
@@ -800,9 +297,7 @@ void gSPForceMatrix( u32 mptr )
 
 	gSP.changed &= ~CHANGED_MATRIX;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_MATRIX, "gSPForceMatrix( 0x%08X );\n", mptr );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPForceMatrix( 0x%08X );\n", mptr);
 }
 
 void gSPLight( u32 l, s32 n )
@@ -811,11 +306,8 @@ void gSPLight( u32 l, s32 n )
 	u32 addrByte = RSP_SegmentToPhysical( l );
 
 	if ((addrByte + sizeof( Light )) > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR, "// Attempting to load light from invalid address\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPLight( 0x%08X, LIGHT_%i );\n",
-			l, n );
-#endif
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to load light from invalid address\n");
+		DebugMsg(DEBUG_NORMAL, "gSPLight( 0x%08X, LIGHT_%i );\n", l, n );
 		return;
 	}
 
@@ -835,21 +327,19 @@ void gSPLight( u32 l, s32 n )
 		gSP.lights.pos_xyzw[n][X] = (float)(((short*)RDRAM)[(addrShort+4)^1]);
 		gSP.lights.pos_xyzw[n][Y] = (float)(((short*)RDRAM)[(addrShort+5)^1]);
 		gSP.lights.pos_xyzw[n][Z] = (float)(((short*)RDRAM)[(addrShort+6)^1]);
-		gSP.lights.ca[n] = (float)(RDRAM[(addrByte + 3) ^ 3]) / 16.0f;
-		gSP.lights.la[n] = (float)(RDRAM[(addrByte + 7) ^ 3]);
-		gSP.lights.qa[n] = (float)(RDRAM[(addrByte + 14) ^ 3]) / 8.0f;
+		gSP.lights.ca[n] = (float)(RDRAM[(addrByte +  3) ^ 3]);
+		gSP.lights.la[n] = (float)(RDRAM[(addrByte +  7) ^ 3]);
+		gSP.lights.qa[n] = (float)(RDRAM[(addrByte + 14) ^ 3]);
 	}
 
 	gSP.changed |= CHANGED_LIGHT;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED, "// x = %2.6f    y = %2.6f    z = %2.6f\n",
+	DebugMsg( DEBUG_DETAIL, "// x = %2.6f    y = %2.6f    z = %2.6f\n",
 		_FIXED2FLOAT( light->x, 7 ), _FIXED2FLOAT( light->y, 7 ), _FIXED2FLOAT( light->z, 7 ) );
-	DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED, "// r = %3i    g = %3i   b = %3i\n",
+	DebugMsg( DEBUG_DETAIL, "// r = %3i    g = %3i   b = %3i\n",
 		light->r, light->g, light->b );
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPLight( 0x%08X, LIGHT_%i );\n",
+	DebugMsg(DEBUG_NORMAL, "gSPLight( 0x%08X, LIGHT_%i );\n",
 		l, n );
-#endif
 }
 
 void gSPLightCBFD( u32 l, s32 n )
@@ -857,20 +347,17 @@ void gSPLightCBFD( u32 l, s32 n )
 	u32 addrByte = RSP_SegmentToPhysical( l );
 
 	if ((addrByte + sizeof( Light )) > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR, "// Attempting to load light from invalid address\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPLight( 0x%08X, LIGHT_%i );\n",
-			l, n );
-#endif
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to load light from invalid address\n");
+		DebugMsg(DEBUG_NORMAL, "gSPLight( 0x%08X, LIGHT_%i );\n", l, n );
 		return;
 	}
 
 	Light *light = (Light*)&RDRAM[addrByte];
 
 	if (n < 12) {
-		gSP.lights.rgb[n][R] = light->r * 0.0039215689f;
-		gSP.lights.rgb[n][G] = light->g * 0.0039215689f;
-		gSP.lights.rgb[n][B] = light->b * 0.0039215689f;
+		gSP.lights.rgb[n][R] = _FIXED2FLOATCOLOR(light->r, 8);
+		gSP.lights.rgb[n][G] = _FIXED2FLOATCOLOR(light->g, 8);
+		gSP.lights.rgb[n][B] = _FIXED2FLOATCOLOR(light->b, 8);
 
 		gSP.lights.xyz[n][X] = light->x;
 		gSP.lights.xyz[n][Y] = light->y;
@@ -887,14 +374,33 @@ void gSPLightCBFD( u32 l, s32 n )
 
 	gSP.changed |= CHANGED_LIGHT;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED, "// x = %2.6f    y = %2.6f    z = %2.6f\n",
+	DebugMsg(DEBUG_NORMAL, "gSPLight( 0x%08X, LIGHT_%i );\n", l, n);
+	DebugMsg(DEBUG_DETAIL, "// x = %2.6f    y = %2.6f    z = %2.6f\n",
 		_FIXED2FLOAT( light->x, 7 ), _FIXED2FLOAT( light->y, 7 ), _FIXED2FLOAT( light->z, 7 ) );
-	DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED, "// r = %3i    g = %3i   b = %3i\n",
+	DebugMsg( DEBUG_DETAIL, "// r = %3i    g = %3i   b = %3i\n",
 		light->r, light->g, light->b );
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPLight( 0x%08X, LIGHT_%i );\n",
-		l, n );
-#endif
+}
+
+void gSPLightAcclaim(u32 l, s32 n)
+{
+	u32 addrByte = RSP_SegmentToPhysical(l);
+
+	if (n < 10) {
+		const u32 addrShort = addrByte >> 1;
+		gSP.lights.pos_xyzw[n][X] = (f32)(((s16*)RDRAM)[(addrShort + 0) ^ 1]);
+		gSP.lights.pos_xyzw[n][Y] = (f32)(((s16*)RDRAM)[(addrShort + 1) ^ 1]);
+		gSP.lights.pos_xyzw[n][Z] = (f32)(((s16*)RDRAM)[(addrShort + 2) ^ 1]);
+		gSP.lights.ca[n] = (f32)(((s16*)RDRAM)[(addrShort + 5) ^ 1]);
+		gSP.lights.la[n] = _FIXED2FLOAT((((u16*)RDRAM)[(addrShort + 6) ^ 1]), 16);
+		gSP.lights.qa[n] = (f32)(((u16*)RDRAM)[(addrShort + 7) ^ 1]);
+		gSP.lights.rgb[n][R] = _FIXED2FLOATCOLOR((RDRAM[(addrByte + 6) ^ 3]), 8);
+		gSP.lights.rgb[n][G] = _FIXED2FLOATCOLOR((RDRAM[(addrByte + 7) ^ 3]), 8);
+		gSP.lights.rgb[n][B] = _FIXED2FLOATCOLOR((RDRAM[(addrByte + 8) ^ 3]), 8);
+	}
+
+	gSP.changed |= CHANGED_LIGHT;
+
+	DebugMsg(DEBUG_NORMAL, "gSPLightAcclaim( 0x%08X, LIGHT_%i );\n", l, n);
 }
 
 void gSPLookAt( u32 _l, u32 _n )
@@ -902,11 +408,8 @@ void gSPLookAt( u32 _l, u32 _n )
 	u32 address = RSP_SegmentToPhysical(_l);
 
 	if ((address + sizeof(Light)) > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg(DEBUG_HIGH | DEBUG_ERROR, "// Attempting to load light from invalid address\n");
-		DebugMsg(DEBUG_HIGH | DEBUG_HANDLED, "gSPLookAt( 0x%08X, LOOKAT_%i );\n",
-			l, n);
-#endif
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to load light from invalid address\n");
+		DebugMsg(DEBUG_NORMAL, "gSPLookAt( 0x%08X, LOOKAT_%i );\n", _l, _n);
 		return;
 	}
 	assert(_n < 2);
@@ -921,6 +424,7 @@ void gSPLookAt( u32 _l, u32 _n )
 
 	Normalize(gSP.lookat.xyz[_n]);
 	gSP.changed |= CHANGED_LOOKAT;
+	DebugMsg(DEBUG_NORMAL, "gSPLookAt( 0x%08X, LOOKAT_%i );\n", _l, _n);
 }
 
 static
@@ -942,12 +446,479 @@ void gSPUpdateLookatVectors()
 	gSP.changed ^= CHANGED_LOOKAT;
 }
 
+/*---------------------------------Vertex Load------------------------------------*/
+
+static
+void gSPTransformVector_default(float vtx[4], float mtx[4][4])
+{
+	const float x = vtx[0];
+	const float y = vtx[1];
+	const float z = vtx[2];
+
+	vtx[0] = x * mtx[0][0] + y * mtx[1][0] + z * mtx[2][0] + mtx[3][0];
+	vtx[1] = x * mtx[0][1] + y * mtx[1][1] + z * mtx[2][1] + mtx[3][1];
+	vtx[2] = x * mtx[0][2] + y * mtx[1][2] + z * mtx[2][2] + mtx[3][2];
+	vtx[3] = x * mtx[0][3] + y * mtx[1][3] + z * mtx[2][3] + mtx[3][3];
+}
+
+static
+void gSPInverseTransformVector_default(float vec[3], float mtx[4][4])
+{
+	const float x = vec[0];
+	const float y = vec[1];
+	const float z = vec[2];
+
+	vec[0] = mtx[0][0] * x + mtx[0][1] * y + mtx[0][2] * z;
+	vec[1] = mtx[1][0] * x + mtx[1][1] * y + mtx[1][2] * z;
+	vec[2] = mtx[2][0] * x + mtx[2][1] * y + mtx[2][2] * z;
+}
+
+template <u32 VNUM>
+void gSPLightVertexStandard(u32 v, SPVertex * spVtx)
+{
+#ifndef __NEON_OPT
+	if (!isHWLightingAllowed()) {
+		for(int j = 0; j < VNUM; ++j) {
+			SPVertex & vtx = spVtx[v+j];
+			vtx.r = gSP.lights.rgb[gSP.numLights][R];
+			vtx.g = gSP.lights.rgb[gSP.numLights][G];
+			vtx.b = gSP.lights.rgb[gSP.numLights][B];
+			vtx.HWLight = 0;
+
+			for (int i = 0; i < gSP.numLights; ++i) {
+				const f32 intensity = DotProduct( &vtx.nx, gSP.lights.i_xyz[i] );
+				if (intensity > 0.0f) {
+					vtx.r += gSP.lights.rgb[i][R] * intensity;
+					vtx.g += gSP.lights.rgb[i][G] * intensity;
+					vtx.b += gSP.lights.rgb[i][B] * intensity;
+				}
+			}
+			vtx.r = min(1.0f, vtx.r);
+			vtx.g = min(1.0f, vtx.g);
+			vtx.b = min(1.0f, vtx.b);
+		}
+	} else {
+		for(int j = 0; j < VNUM; ++j) {
+			SPVertex & vtx = spVtx[v+j];
+			TransformVectorNormalize(&vtx.r, gSP.matrix.modelView[gSP.matrix.modelViewi]);
+			vtx.HWLight = gSP.numLights;
+		}
+	}
+#else
+	void gSPLightVertex_NEON(u32 vnum, u32 v, SPVertex * spVtx);
+	gSPLightVertex_NEON(VNUM, v, spVtx);
+#endif
+}
+
+template <u32 VNUM>
+void gSPLightVertexCBFD(u32 v, SPVertex * spVtx)
+{
+	for (int j = 0; j < VNUM; ++j) {
+		SPVertex & vtx = spVtx[v + j];
+		f32 r = gSP.lights.rgb[gSP.numLights][R];
+		f32 g = gSP.lights.rgb[gSP.numLights][G];
+		f32 b = gSP.lights.rgb[gSP.numLights][B];
+
+		for (u32 l = 0; l < gSP.numLights; ++l) {
+			const f32 vx = (vtx.x + gSP.vertexCoordMod[8])*gSP.vertexCoordMod[12] - gSP.lights.pos_xyzw[l][X];
+			const f32 vy = (vtx.y + gSP.vertexCoordMod[9])*gSP.vertexCoordMod[13] - gSP.lights.pos_xyzw[l][Y];
+			const f32 vz = (vtx.z + gSP.vertexCoordMod[10])*gSP.vertexCoordMod[14] - gSP.lights.pos_xyzw[l][Z];
+			const f32 vw = (vtx.w + gSP.vertexCoordMod[11])*gSP.vertexCoordMod[15] - gSP.lights.pos_xyzw[l][W];
+			const f32 len = (vx*vx + vy*vy + vz*vz + vw*vw) / 65536.0f;
+			f32 intensity = gSP.lights.ca[l] / len;
+			if (intensity > 1.0f) intensity = 1.0f;
+			r += gSP.lights.rgb[l][R] * intensity;
+			g += gSP.lights.rgb[l][G] * intensity;
+			b += gSP.lights.rgb[l][B] * intensity;
+		}
+
+		r = min(1.0f, r);
+		g = min(1.0f, g);
+		b = min(1.0f, b);
+
+		vtx.r *= r;
+		vtx.g *= g;
+		vtx.b *= b;
+		vtx.HWLight = 0;
+	}
+}
+
+template <u32 VNUM>
+void gSPLightVertex(u32 _v, SPVertex * _spVtx)
+{
+	if (g_ConkerUcode)
+		gSPLightVertexCBFD<VNUM>(_v, _spVtx);
+	else
+		gSPLightVertexStandard<VNUM>(_v, _spVtx);
+}
+
+void gSPLightVertex(SPVertex & _vtx)
+{
+	gSPLightVertex<1>(0, &_vtx);
+}
+
+template <u32 VNUM>
+void gSPPointLightVertexZeldaMM(u32 v, float _vecPos[VNUM][4], SPVertex * spVtx)
+{
+	f32 intensity = 0.0f;
+	for (int j = 0; j < VNUM; ++j) {
+		SPVertex & vtx = spVtx[v + j];
+		vtx.HWLight = 0;
+		vtx.r = gSP.lights.rgb[gSP.numLights][R];
+		vtx.g = gSP.lights.rgb[gSP.numLights][G];
+		vtx.b = gSP.lights.rgb[gSP.numLights][B];
+		gSPTransformVector(_vecPos[j], gSP.matrix.modelView[gSP.matrix.modelViewi]);
+
+		for (u32 l = 0; l < gSP.numLights; ++l) {
+			if (gSP.lights.ca[l] != 0.0f) {
+				// Point lighting
+				f32 lvec[3] = { gSP.lights.pos_xyzw[l][X], gSP.lights.pos_xyzw[l][Y], gSP.lights.pos_xyzw[l][Z] };
+				lvec[0] -= _vecPos[j][0];
+				lvec[1] -= _vecPos[j][1];
+				lvec[2] -= _vecPos[j][2];
+
+				const f32 K = lvec[0] * lvec[0] + lvec[1] * lvec[1] + lvec[2] * lvec[2] * 2.0f;
+				const f32 KS = sqrtf(K);
+
+				gSPInverseTransformVector(lvec, gSP.matrix.modelView[gSP.matrix.modelViewi]);
+
+				for (u32 i = 0; i < 3; ++i) {
+					lvec[i] = (4.0f * lvec[i] / KS);
+					if (lvec[i] < -1.0f)
+						lvec[i] = -1.0f;
+					if (lvec[i] > 1.0f)
+						lvec[i] = 1.0f;
+				}
+
+				f32 V = lvec[0] * vtx.nx + lvec[1] * vtx.ny + lvec[2] * vtx.nz;
+				if (V < -1.0f)
+					V = -1.0f;
+				if (V > 1.0f)
+					V = 1.0f;
+
+				const f32 KSF = floorf(KS);
+				const f32 D = (KSF * gSP.lights.la[l] * 2.0f + KSF * KSF * gSP.lights.qa[l] / 8.0f) / 65536.0f + 1.0f;
+				intensity = V / D;
+			} else {
+				// Standard lighting
+				intensity = DotProduct(&vtx.nx, gSP.lights.i_xyz[l]);
+			}
+			if (intensity > 0.0f) {
+				vtx.r += gSP.lights.rgb[l][R] * intensity;
+				vtx.g += gSP.lights.rgb[l][G] * intensity;
+				vtx.b += gSP.lights.rgb[l][B] * intensity;
+			}
+		}
+		if (vtx.r > 1.0f) vtx.r = 1.0f;
+		if (vtx.g > 1.0f) vtx.g = 1.0f;
+		if (vtx.b > 1.0f) vtx.b = 1.0f;
+	}
+}
+
+template <u32 VNUM>
+void gSPPointLightVertexCBFD(u32 v, SPVertex * spVtx)
+{
+	f32 intensity = 0.0f;
+	for (int j = 0; j < VNUM; ++j) {
+		SPVertex & vtx = spVtx[v + j];
+		f32 r = gSP.lights.rgb[gSP.numLights][R];
+		f32 g = gSP.lights.rgb[gSP.numLights][G];
+		f32 b = gSP.lights.rgb[gSP.numLights][B];
+
+		for (u32 l = 0; l < gSP.numLights - 1; ++l) {
+			intensity = DotProduct(&vtx.nx, gSP.lights.xyz[l]);
+			if ((gSP.lights.rgb[l][R] == 0.0f && gSP.lights.rgb[l][G] == 0.0f && gSP.lights.rgb[l][B] == 0.0f) || intensity < 0.0f)
+				continue;
+			if (gSP.lights.ca[l] > 0.0f) {
+				const f32 vx = (vtx.x + gSP.vertexCoordMod[8])*gSP.vertexCoordMod[12] - gSP.lights.pos_xyzw[l][X];
+				const f32 vy = (vtx.y + gSP.vertexCoordMod[9])*gSP.vertexCoordMod[13] - gSP.lights.pos_xyzw[l][Y];
+				const f32 vz = (vtx.z + gSP.vertexCoordMod[10])*gSP.vertexCoordMod[14] - gSP.lights.pos_xyzw[l][Z];
+				const f32 vw = (vtx.w + gSP.vertexCoordMod[11])*gSP.vertexCoordMod[15] - gSP.lights.pos_xyzw[l][W];
+				const f32 len = (vx*vx + vy*vy + vz*vz + vw*vw) / 65536.0f;
+				float p_i = gSP.lights.ca[l] / len;
+				if (p_i > 1.0f) p_i = 1.0f;
+				intensity *= p_i;
+			}
+			r += gSP.lights.rgb[l][R] * intensity;
+			g += gSP.lights.rgb[l][G] * intensity;
+			b += gSP.lights.rgb[l][B] * intensity;
+		}
+
+		intensity = DotProduct(&vtx.nx, gSP.lights.i_xyz[gSP.numLights - 1]);
+		if ((gSP.lights.i_xyz[gSP.numLights - 1][R] != 0.0 || gSP.lights.i_xyz[gSP.numLights - 1][G] != 0.0 || gSP.lights.i_xyz[gSP.numLights - 1][B] != 0.0) && intensity > 0) {
+			r += gSP.lights.rgb[gSP.numLights - 1][R] * intensity;
+			g += gSP.lights.rgb[gSP.numLights - 1][G] * intensity;
+			b += gSP.lights.rgb[gSP.numLights - 1][B] * intensity;
+		}
+
+		r = min(1.0f, r);
+		g = min(1.0f, g);
+		b = min(1.0f, b);
+
+		vtx.r *= r;
+		vtx.g *= g;
+		vtx.b *= b;
+		vtx.HWLight = 0;
+	}
+}
+
+template <u32 VNUM>
+void gSPPointLightVertex(u32 _v, float _vecPos[VNUM][4], SPVertex * _spVtx)
+{
+	if (g_ConkerUcode)
+		gSPPointLightVertexCBFD<VNUM>(_v, _spVtx);
+	else
+		gSPPointLightVertexZeldaMM<VNUM>(_v, _vecPos, _spVtx);
+}
+
+template <u32 VNUM>
+void gSPPointLightVertexAcclaim(u32 v, SPVertex * spVtx)
+{
+	for (int j = 0; j < VNUM; ++j) {
+		SPVertex & vtx = spVtx[v + j];
+		vtx.HWLight = 0;
+
+		for (u32 l = 2; l < 10; ++l) {
+			if (gSP.lights.ca[l] < 0)
+				continue;
+
+			const f32 dX = fabsf(gSP.lights.pos_xyzw[l][X] - vtx.x);
+			const f32 dY = fabsf(gSP.lights.pos_xyzw[l][Y] - vtx.y);
+			const f32 dZ = fabsf(gSP.lights.pos_xyzw[l][Z] - vtx.z);
+			const f32 distance = dX + dY + dZ - gSP.lights.ca[l];
+			if (distance >= 0.0f)
+				continue;
+
+			const f32 light_intensity = -distance * gSP.lights.la[l];
+			vtx.r += gSP.lights.rgb[l][R] * light_intensity;
+			vtx.g += gSP.lights.rgb[l][G] * light_intensity;
+			vtx.b += gSP.lights.rgb[l][B] * light_intensity;
+		}
+
+		if (vtx.r > 1.0f) vtx.r = 1.0f;
+		if (vtx.g > 1.0f) vtx.g = 1.0f;
+		if (vtx.b > 1.0f) vtx.b = 1.0f;
+	}
+}
+
+template <u32 VNUM>
+void gSPBillboardVertex(u32 v, SPVertex * spVtx)
+{
+#ifndef __NEON_OPT
+	SPVertex & vtx0 = spVtx[0];
+	for (u32 j = 0; j < VNUM; ++j) {
+		SPVertex & vtx = spVtx[v + j];
+		vtx.x += vtx0.x;
+		vtx.y += vtx0.y;
+		vtx.z += vtx0.z;
+		vtx.w += vtx0.w;
+	}
+#else
+	if (VNUM == 1) {
+		SPVertex & vtx0 = spVtx[0];
+		SPVertex & vtx = spVtx[v];
+		vtx.x += vtx0.x;
+		vtx.y += vtx0.y;
+		vtx.z += vtx0.z;
+		vtx.w += vtx0.w;
+	} else {
+		void gSPBillboardVertex4NEON(u32 v);
+		gSPBillboardVertex4NEON(v);
+	}
+#endif //__NEON_OPT
+}
+
+template <u32 VNUM>
+void gSPClipVertex(u32 v, SPVertex * spVtx)
+{
+	for (u32 j = 0; j < VNUM; ++j) {
+		SPVertex & vtx = spVtx[v+j];
+		vtx.clip = 0;
+		if (vtx.x > +vtx.w) vtx.clip |= CLIP_POSX;
+		if (vtx.x < -vtx.w) vtx.clip |= CLIP_NEGX;
+		if (vtx.y > +vtx.w) vtx.clip |= CLIP_POSY;
+		if (vtx.y < -vtx.w) vtx.clip |= CLIP_NEGY;
+		if (vtx.w < 0.01f) vtx.clip |= CLIP_W;
+	}
+}
+
+template <u32 VNUM>
+void gSPTransformVertex(u32 v, SPVertex * spVtx, float mtx[4][4])
+{
+#ifndef __NEON_OPT
+	float x, y, z;
+	for (int i = 0; i < VNUM; ++i) {
+		SPVertex & vtx = spVtx[v+i];
+		x = vtx.x;
+		y = vtx.y;
+		z = vtx.z;
+		vtx.x = x * mtx[0][0] + y * mtx[1][0] + z * mtx[2][0] + mtx[3][0];
+		vtx.y = x * mtx[0][1] + y * mtx[1][1] + z * mtx[2][1] + mtx[3][1];
+		vtx.z = x * mtx[0][2] + y * mtx[1][2] + z * mtx[2][2] + mtx[3][2];
+		vtx.w = x * mtx[0][3] + y * mtx[1][3] + z * mtx[2][3] + mtx[3][3];
+	}
+#else
+	void gSPTransformVector_NEON(float vtx[4], float mtx[4][4]);
+	void gSPTransformVertex4NEON(u32 v, float mtx[4][4]);
+	if (VNUM == 1)
+		gSPTransformVector_NEON(&spVtx[v].x, mtx);
+	else
+		gSPTransformVertex4NEON(v, mtx);
+#endif //__NEON_OPT
+}
+
+template <u32 VNUM>
+void gSPProcessVertex(u32 v, SPVertex * spVtx)
+{
+	if (gSP.changed & CHANGED_MATRIX)
+		_gSPCombineMatrices();
+
+	float vPos[VNUM][4];
+	for(u32 i = 0; i < VNUM; ++i) {
+		SPVertex & vtx = spVtx[v+i];
+		vPos[i][0] = vtx.x;
+		vPos[i][1] = vtx.y;
+		vPos[i][2] = vtx.z;
+		vPos[i][3] = 0.0f;
+		vtx.modify = 0;
+	}
+
+	gSPTransformVertex<VNUM>(v, spVtx, gSP.matrix.combined );
+
+	if (dwnd().isAdjustScreen() && (gDP.colorImage.width > VI.width * 98 / 100)) {
+		const f32 adjustScale = dwnd().getAdjustScale();
+		for(int i = 0; i < VNUM; ++i) {
+			SPVertex & vtx = spVtx[v+i];
+			vtx.x *= adjustScale;
+			if (gSP.matrix.projection[3][2] == -1.f)
+				vtx.w *= adjustScale;
+		}
+	}
+	if (gSP.viewport.vscale[0] < 0) {
+		for(int i = 0; i < VNUM; ++i) {
+			SPVertex & vtx = spVtx[v+i];
+			vtx.x = -vtx.x;
+		}
+	}
+	if (gSP.viewport.vscale[1] < 0) {
+		for(int i = 0; i < VNUM; ++i) {
+			SPVertex & vtx = spVtx[v+i];
+			vtx.y = -vtx.y;
+		}
+	}
+
+	if (gSP.matrix.billboard)
+		gSPBillboardVertex<VNUM>(v, spVtx);
+
+	gSPClipVertex<VNUM>(v, spVtx);
+
+	if (gSP.geometryMode & G_LIGHTING) {
+		if (gSP.geometryMode & G_POINT_LIGHTING)
+			gSPPointLightVertex<VNUM>(v, vPos, spVtx);
+		else
+			gSPLightVertex<VNUM>(v, spVtx);
+
+		if ((gSP.geometryMode & G_TEXTURE_GEN) != 0) {
+			if (GBI.getMicrocodeType() != F3DFLX2) {
+				for(int i = 0; i < VNUM; ++i) {
+					SPVertex & vtx = spVtx[v+i];
+					f32 fLightDir[3] = {vtx.nx, vtx.ny, vtx.nz};
+					f32 x, y;
+					if (gSP.lookatEnable) {
+						x = DotProduct(gSP.lookat.i_xyz[0], fLightDir);
+						y = DotProduct(gSP.lookat.i_xyz[1], fLightDir);
+					} else {
+						fLightDir[0] *= 128.0f;
+						fLightDir[1] *= 128.0f;
+						fLightDir[2] *= 128.0f;
+						TransformVectorNormalize(fLightDir, gSP.matrix.modelView[gSP.matrix.modelViewi]);
+						x = fLightDir[0];
+						y = fLightDir[1];
+					}
+					if (gSP.geometryMode & G_TEXTURE_GEN_LINEAR) {
+						vtx.s = acosf(-x) * 325.94931f;
+						vtx.t = acosf(-y) * 325.94931f;
+					} else { // G_TEXTURE_GEN
+						vtx.s = (x + 1.0f) * 512.0f;
+						vtx.t = (y + 1.0f) * 512.0f;
+					}
+				}
+			} else {
+				for(int i = 0; i < VNUM; ++i) {
+					SPVertex & vtx = spVtx[v+i];
+					const f32 intensity = DotProduct(gSP.lookat.i_xyz[0], &vtx.nx) * 128.0f;
+					const s16 index = static_cast<s16>(intensity);
+					vtx.a = _FIXED2FLOATCOLOR(RDRAM[(gSP.DMAIO_address + 128 + index) ^ 3], 8);
+				}
+			}
+		}
+	} else if (gSP.geometryMode & G_ACCLAIM_LIGHTING) {
+		gSPPointLightVertexAcclaim<VNUM>(v, spVtx);
+	} else {
+		for(u32 i = 0; i < VNUM; ++i)
+			spVtx[v].HWLight = 0;
+	}
+
+	for(u32 i = 0; i < VNUM; ++i) {
+		SPVertex & vtx = spVtx[v+i];
+		DebugMsg(DEBUG_DETAIL, "v%d - x: %f, y: %f, z: %f, w: %f, s: %f, t: %f, r=%02f, g=%02f, b=%02f, a=%02f\n",
+				 i, vtx.x, vtx.y, vtx.z, vtx.w, vtx.s, vtx.t, vtx.r, vtx.g, vtx.b, vtx.a);
+	}
+}
+
+template <u32 VNUM>
+u32 gSPLoadVertexData(const Vertex *orgVtx, SPVertex * spVtx, u32 v0, u32 vi, u32 n)
+{
+	const u32 end = n - (n%VNUM) + v0;
+	for (; vi < end; vi += VNUM) {
+		for(u32 j = 0; j < VNUM; ++j) {
+			SPVertex & vtx = spVtx[vi+j];
+			vtx.x = orgVtx->x;
+			vtx.y = orgVtx->y;
+			vtx.z = orgVtx->z;
+			//vtx.flag = vertex->flag;
+			vtx.s = _FIXED2FLOAT( orgVtx->s, 5 );
+			vtx.t = _FIXED2FLOAT( orgVtx->t, 5 );
+
+			if (gSP.geometryMode & G_LIGHTING) {
+				vtx.nx = _FIXED2FLOATCOLOR(orgVtx->normal.x, 7);
+				vtx.ny = _FIXED2FLOATCOLOR(orgVtx->normal.y, 7);
+				vtx.nz = _FIXED2FLOATCOLOR(orgVtx->normal.z, 7);
+				if (isHWLightingAllowed()) {
+					vtx.r = orgVtx->normal.x;
+					vtx.g = orgVtx->normal.y;
+					vtx.b = orgVtx->normal.z;
+				}
+			} else {
+				vtx.r = _FIXED2FLOATCOLOR(orgVtx->color.r, 8);
+				vtx.g = _FIXED2FLOATCOLOR(orgVtx->color.g, 8);
+				vtx.b = _FIXED2FLOATCOLOR(orgVtx->color.b, 8);
+			}
+			vtx.a = _FIXED2FLOATCOLOR(orgVtx->color.a, 8);
+
+			++orgVtx;
+		}
+		gSPProcessVertex<VNUM>(vi, spVtx);
+	}
+	return vi;
+}
+
 void gSPVertex(u32 a, u32 n, u32 v0)
 {
-	u32 address = RSP_SegmentToPhysical(a);
+	DebugMsg(DEBUG_NORMAL, "gSPVertex n = %i, v0 = %i, from %08x\n", n, v0, a);
 
-	if ((address + sizeof( Vertex ) * n) > RDRAMSize)
+	if ((n + v0) > INDEXMAP_SIZE) {
+		LOG(LOG_ERROR, "Using Vertex outside buffer v0=%i, n=%i\n", v0, n);
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "//Using Vertex outside buffer v0 = %i, n = %i\n", v0, n);
 		return;
+	}
+
+	const u32 address = RSP_SegmentToPhysical(a);
+
+	if ((address + sizeof(Vertex)* n) > RDRAMSize) {
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "gSPVertex Using Vertex outside RDRAM n = %i, v0 = %i, from %08x\n", n, v0, a);
+		return;
+	}
 
 	if ((gSP.geometryMode & G_LIGHTING) != 0) {
 
@@ -958,69 +929,61 @@ void gSPVertex(u32 a, u32 n, u32 v0)
 			gSPUpdateLookatVectors();
 	}
 
-	Vertex *vertex = (Vertex*)&RDRAM[address];
+	const Vertex *vertex = (Vertex*)&RDRAM[address];
+	SPVertex * spVtx = dwnd().getDrawer().getVertexPtr(0);
+	u32 i = gSPLoadVertexData<VEC_OPT>(vertex, spVtx, v0, v0, n);
+	if (i < n + v0)
+		gSPLoadVertexData<1>(vertex + (i - v0), spVtx, v0, i, n);
+}
 
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	if ((n + v0) <= INDEXMAP_SIZE) {
-		unsigned int i = v0;
-#ifdef __VEC4_OPT
-		for (; i < n - (n%4) + v0; i += 4) {
-			u32 v = i;
-			for(int j = 0; j < 4; ++j) {
-				SPVertex & vtx = drawer.getVertex(v+j);
-				vtx.x = vertex->x;
-				vtx.y = vertex->y;
-				vtx.z = vertex->z;
-				//vtx.flag = vertex->flag;
-				vtx.s = _FIXED2FLOAT( vertex->s, 5 );
-				vtx.t = _FIXED2FLOAT( vertex->t, 5 );
-				if (gSP.geometryMode & G_LIGHTING) {
-					vtx.nx = _FIXED2FLOAT( vertex->normal.x, 7 );
-					vtx.ny = _FIXED2FLOAT( vertex->normal.y, 7 );
-					vtx.nz = _FIXED2FLOAT( vertex->normal.z, 7 );
-					vtx.a = vertex->color.a * 0.0039215689f;
-				} else {
-					vtx.r = vertex->color.r * 0.0039215689f;
-					vtx.g = vertex->color.g * 0.0039215689f;
-					vtx.b = vertex->color.b * 0.0039215689f;
-					vtx.a = vertex->color.a * 0.0039215689f;
-				}
-				vertex++;
-			}
-			gSPProcessVertex4(v);
-		}
-#endif
-		for (; i < n + v0; ++i) {
-			u32 v = i;
-			SPVertex & vtx = drawer.getVertex(v);
-			vtx.x = vertex->x;
-			vtx.y = vertex->y;
-			vtx.z = vertex->z;
-			vtx.s = _FIXED2FLOAT( vertex->s, 5 );
-			vtx.t = _FIXED2FLOAT( vertex->t, 5 );
+template <u32 VNUM>
+u32 gSPLoadCIVertexData(const PDVertex *orgVtx, SPVertex * spVtx, u32 v0, u32 vi, u32 n)
+{
+	const u32 end = n - (n%VNUM) + v0;
+	for (; vi < end; vi += VNUM) {
+		for(u32 j = 0; j < VNUM; ++j) {
+			SPVertex & vtx = spVtx[vi+j];
+			vtx.x = orgVtx->x;
+			vtx.y = orgVtx->y;
+			vtx.z = orgVtx->z;
+			vtx.s = _FIXED2FLOAT( orgVtx->s, 5 );
+			vtx.t = _FIXED2FLOAT( orgVtx->t, 5 );
+			u8 *color = &RDRAM[gSP.vertexColorBase + (orgVtx->ci & 0xff)];
+
 			if (gSP.geometryMode & G_LIGHTING) {
-				vtx.nx = _FIXED2FLOAT(vertex->normal.x, 7);
-				vtx.ny = _FIXED2FLOAT(vertex->normal.y, 7);
-				vtx.nz = _FIXED2FLOAT(vertex->normal.z, 7);
-				vtx.a = vertex->color.a * 0.0039215689f;
+				vtx.nx = _FIXED2FLOATCOLOR((s8)color[3], 7);
+				vtx.ny = _FIXED2FLOATCOLOR((s8)color[2], 7);
+				vtx.nz = _FIXED2FLOATCOLOR((s8)color[1], 7);
+				if (isHWLightingAllowed()) {
+					vtx.r = (s8)color[3];
+					vtx.g = (s8)color[2];
+					vtx.b = (s8)color[1];
+				}
 			} else {
-				vtx.r = vertex->color.r * 0.0039215689f;
-				vtx.g = vertex->color.g * 0.0039215689f;
-				vtx.b = vertex->color.b * 0.0039215689f;
-				vtx.a = vertex->color.a * 0.0039215689f;
+				vtx.r = _FIXED2FLOATCOLOR(color[3], 8);
+				vtx.g = _FIXED2FLOATCOLOR(color[2], 8);
+				vtx.b = _FIXED2FLOATCOLOR(color[1], 8);
 			}
-			gSPProcessVertex(v);
-			vertex++;
+			vtx.a = _FIXED2FLOATCOLOR(color[0], 8);
+
+			++orgVtx;
 		}
-	} else {
-		LOG(LOG_ERROR, "Using Vertex outside buffer v0=%i, n=%i\n", v0, n);
+		gSPProcessVertex<VNUM>(vi, spVtx);
 	}
+	return vi;
 }
 
 void gSPCIVertex( u32 a, u32 n, u32 v0 )
 {
+	DebugMsg(DEBUG_NORMAL, "gSPCIVertex n = %i, v0 = %i, from %08x\n", n, v0, a);
 
-	u32 address = RSP_SegmentToPhysical( a );
+	if ((n + v0) > INDEXMAP_SIZE) {
+		LOG(LOG_ERROR, "Using Vertex outside buffer v0=%i, n=%i\n", v0, n);
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "//Using Vertex outside buffer v0 = %i, n = %i\n", v0, n);
+		return;
+	}
+
+	const u32 address = RSP_SegmentToPhysical( a );
 
 	if ((address + sizeof( PDVertex ) * n) > RDRAMSize)
 		return;
@@ -1034,144 +997,98 @@ void gSPCIVertex( u32 a, u32 n, u32 v0 )
 			gSPUpdateLookatVectors();
 	}
 
-	PDVertex *vertex = (PDVertex*)&RDRAM[address];
-
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	if ((n + v0) <= INDEXMAP_SIZE) {
-		unsigned int i = v0;
-#ifdef __VEC4_OPT
-		for (; i < n - (n%4) + v0; i += 4) {
-			u32 v = i;
-			for(unsigned int j = 0; j < 4; ++j) {
-				SPVertex & vtx = drawer.getVertex(v + j);
-				vtx.x = vertex->x;
-				vtx.y = vertex->y;
-				vtx.z = vertex->z;
-				vtx.s = _FIXED2FLOAT( vertex->s, 5 );
-				vtx.t = _FIXED2FLOAT( vertex->t, 5 );
-				u8 *color = &RDRAM[gSP.vertexColorBase + (vertex->ci & 0xff)];
-
-				if (gSP.geometryMode & G_LIGHTING) {
-					vtx.nx = _FIXED2FLOAT((s8)color[3], 7);
-					vtx.ny = _FIXED2FLOAT((s8)color[2], 7);
-					vtx.nz = _FIXED2FLOAT((s8)color[1], 7);
-					vtx.a = color[0] * 0.0039215689f;
-				} else {
-					vtx.r = color[3] * 0.0039215689f;
-					vtx.g = color[2] * 0.0039215689f;
-					vtx.b = color[1] * 0.0039215689f;
-					vtx.a = color[0] * 0.0039215689f;
-				}
-				vertex++;
-			}
-			gSPProcessVertex4(v);
-		}
-#endif
-		for(; i < n + v0; ++i) {
-			u32 v = i;
-			SPVertex & vtx = drawer.getVertex(v);
-			vtx.x = vertex->x;
-			vtx.y = vertex->y;
-			vtx.z = vertex->z;
-			vtx.s = _FIXED2FLOAT( vertex->s, 5 );
-			vtx.t = _FIXED2FLOAT( vertex->t, 5 );
-			u8 *color = &RDRAM[gSP.vertexColorBase + (vertex->ci & 0xff)];
-
-			if (gSP.geometryMode & G_LIGHTING) {
-				vtx.nx = _FIXED2FLOAT((s8)color[3], 7);
-				vtx.ny = _FIXED2FLOAT((s8)color[2], 7);
-				vtx.nz = _FIXED2FLOAT((s8)color[1], 7);
-				vtx.a = color[0] * 0.0039215689f;
-			} else {
-				vtx.r = color[3] * 0.0039215689f;
-				vtx.g = color[2] * 0.0039215689f;
-				vtx.b = color[1] * 0.0039215689f;
-				vtx.a = color[0] * 0.0039215689f;
-			}
-
-			gSPProcessVertex(v);
-			vertex++;
-		}
-	} else {
-		LOG(LOG_ERROR, "Using Vertex outside buffer v0=%i, n=%i\n", v0, n);
-	}
+	const PDVertex *vertex = (PDVertex*)&RDRAM[address];
+	SPVertex * spVtx = dwnd().getDrawer().getVertexPtr(0);
+	u32 i = gSPLoadCIVertexData<VEC_OPT>(vertex, spVtx, v0, v0, n);
+	if (i < n + v0)
+		gSPLoadCIVertexData<1>(vertex + (i - v0), spVtx, v0, i, n);
 }
 
-void gSPDMAVertex( u32 a, u32 n, u32 v0 )
+
+template <u32 VNUM>
+u32 gSPLoadDMAVertexData(u32 address, SPVertex * spVtx, u32 v0, u32 vi, u32 n)
 {
-
-	u32 address = gSP.DMAOffsets.vtx + RSP_SegmentToPhysical(a);
-
-	if ((address + 10 * n) > RDRAMSize)
-		return;
-
-	if ((gSP.geometryMode & G_LIGHTING) != 0) {
-
-		if ((gSP.changed & CHANGED_LIGHT) != 0)
-			gSPUpdateLightVectors();
-
-		if (((gSP.geometryMode & G_TEXTURE_GEN) != 0) && ((gSP.changed & CHANGED_LOOKAT) != 0))
-			gSPUpdateLookatVectors();
-	}
-
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	if ((n + v0) <= INDEXMAP_SIZE) {
-		u32 i = v0;
-#ifdef __VEC4_OPT
-		for (; i < n - (n%4) + v0; i += 4) {
-			u32 v = i;
-			for(int j = 0; j < 4; ++j) {
-				SPVertex & vtx = drawer.getVertex(v + j);
-				vtx.x = *(s16*)&RDRAM[address ^ 2];
-				vtx.y = *(s16*)&RDRAM[(address + 2) ^ 2];
-				vtx.z = *(s16*)&RDRAM[(address + 4) ^ 2];
-
-				if (gSP.geometryMode & G_LIGHTING) {
-					vtx.nx = _FIXED2FLOAT(*(s8*)&RDRAM[(address + 6) ^ 3], 7);
-					vtx.ny = _FIXED2FLOAT(*(s8*)&RDRAM[(address + 7) ^ 3], 7);
-					vtx.nz = _FIXED2FLOAT(*(s8*)&RDRAM[(address + 8) ^ 3], 7);
-					vtx.a = *(u8*)&RDRAM[(address + 9) ^ 3] * 0.0039215689f;
-				} else {
-					vtx.r = *(u8*)&RDRAM[(address + 6) ^ 3] * 0.0039215689f;
-					vtx.g = *(u8*)&RDRAM[(address + 7) ^ 3] * 0.0039215689f;
-					vtx.b = *(u8*)&RDRAM[(address + 8) ^ 3] * 0.0039215689f;
-					vtx.a = *(u8*)&RDRAM[(address + 9) ^ 3] * 0.0039215689f;
-				}
-				address += 10;
-			}
-			gSPProcessVertex4(v);
-		}
-#endif
-		for (; i < n + v0; ++i) {
-			u32 v = i;
-			SPVertex & vtx = drawer.getVertex(v);
+	const u32 end = n - (n%VNUM) + v0;
+	for (; vi < end; vi += VNUM) {
+		for(u32 j = 0; j < VNUM; ++j) {
+			SPVertex & vtx = spVtx[vi+j];
 			vtx.x = *(s16*)&RDRAM[address ^ 2];
 			vtx.y = *(s16*)&RDRAM[(address + 2) ^ 2];
 			vtx.z = *(s16*)&RDRAM[(address + 4) ^ 2];
 
-			if (gSP.geometryMode & G_LIGHTING) {
-				vtx.nx = _FIXED2FLOAT(*(s8*)&RDRAM[(address + 6) ^ 3], 7);
-				vtx.ny = _FIXED2FLOAT(*(s8*)&RDRAM[(address + 7) ^ 3], 7);
-				vtx.nz = _FIXED2FLOAT(*(s8*)&RDRAM[(address + 8) ^ 3], 7);
-				vtx.a = *(u8*)&RDRAM[(address + 9) ^ 3] * 0.0039215689f;
-			} else {
-				vtx.r = *(u8*)&RDRAM[(address + 6) ^ 3] * 0.0039215689f;
-				vtx.g = *(u8*)&RDRAM[(address + 7) ^ 3] * 0.0039215689f;
-				vtx.b = *(u8*)&RDRAM[(address + 8) ^ 3] * 0.0039215689f;
-				vtx.a = *(u8*)&RDRAM[(address + 9) ^ 3] * 0.0039215689f;
-			}
+			vtx.r = _FIXED2FLOATCOLOR((*(u8*)&RDRAM[(address + 6) ^ 3]), 8);
+			vtx.g = _FIXED2FLOATCOLOR((*(u8*)&RDRAM[(address + 7) ^ 3]), 8);
+			vtx.b = _FIXED2FLOATCOLOR((*(u8*)&RDRAM[(address + 8) ^ 3]), 8);
+			vtx.a = _FIXED2FLOATCOLOR((*(u8*)&RDRAM[(address + 9) ^ 3]), 8);
 
-			gSPProcessVertex(v);
 			address += 10;
 		}
-	} else {
-		LOG(LOG_ERROR, "Using Vertex outside buffer v0=%i, n=%i\n", v0, n);
+		gSPProcessVertex<VNUM>(vi, spVtx);
 	}
+	return vi;
+}
+
+void gSPDMAVertex( u32 a, u32 n, u32 v0 )
+{
+	DebugMsg(DEBUG_NORMAL, "gSPDMAVertex n = %i, v0 = %i, from %08x\n", n, v0, a);
+
+	if ((n + v0) > INDEXMAP_SIZE) {
+		LOG(LOG_ERROR, "Using Vertex outside buffer v0=%i, n=%i\n", v0, n);
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "//Using Vertex outside buffer v0 = %i, n = %i\n", v0, n);
+		return;
+	}
+
+	const u32 address = gSP.DMAOffsets.vtx + RSP_SegmentToPhysical(a);
+
+	if ((address + 10 * n) > RDRAMSize)
+		return;
+
+	SPVertex * spVtx = dwnd().getDrawer().getVertexPtr(0);
+	u32 i = gSPLoadDMAVertexData<VEC_OPT>(address, spVtx, v0, v0, n);
+	if (i < n + v0)
+		gSPLoadDMAVertexData<1>(address + (i - v0) * 10, spVtx, v0, i, n);
+}
+
+template <u32 VNUM>
+u32 gSPLoadCBFDVertexData(const Vertex *orgVtx, SPVertex * spVtx, u32 v0, u32 vi, u32 n)
+{
+	const u32 end = n - (n%VNUM) + v0;
+	for (; vi < end; vi += VNUM) {
+		for(u32 j = 0; j < VNUM; ++j) {
+			SPVertex & vtx = spVtx[vi+j];
+			vtx.x = orgVtx->x;
+			vtx.y = orgVtx->y;
+			vtx.z = orgVtx->z;
+			vtx.s = _FIXED2FLOAT( orgVtx->s, 5 );
+			vtx.t = _FIXED2FLOAT( orgVtx->t, 5 );
+			if (gSP.geometryMode & G_LIGHTING) {
+				const u32 normaleAddrOffset = ((vi+j)<<1);
+				vtx.nx = _FIXED2FLOATCOLOR(((s8*)RDRAM)[(gSP.vertexNormalBase + normaleAddrOffset + 0) ^ 3], 7);
+				vtx.ny = _FIXED2FLOATCOLOR(((s8*)RDRAM)[(gSP.vertexNormalBase + normaleAddrOffset + 1) ^ 3], 7);
+				vtx.nz = _FIXED2FLOATCOLOR((s8)(orgVtx->flag & 0xFF), 7);
+			}
+			vtx.r = _FIXED2FLOATCOLOR(orgVtx->color.r, 8);
+			vtx.g = _FIXED2FLOATCOLOR(orgVtx->color.g, 8);
+			vtx.b = _FIXED2FLOATCOLOR(orgVtx->color.b, 8);
+			vtx.a = _FIXED2FLOATCOLOR(orgVtx->color.a, 8);
+			++orgVtx;
+		}
+		gSPProcessVertex<VNUM>(vi, spVtx);
+	}
+	return vi;
 }
 
 void gSPCBFDVertex( u32 a, u32 n, u32 v0 )
 {
-	u32 address = RSP_SegmentToPhysical(a);
+	DebugMsg(DEBUG_NORMAL, "gSPCBFDVertex n = %i, v0 = %i, from %08x\n", n, v0, a);
+
+	if ((n + v0) > INDEXMAP_SIZE) {
+		LOG(LOG_ERROR, "Using Vertex outside buffer v0=%i, n=%i\n", v0, n);
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "//Using Vertex outside buffer v0 = %i, n = %i\n", v0, n);
+		return;
+	}
+
+	const u32 address = RSP_SegmentToPhysical(a);
 
 	if ((address + sizeof( Vertex ) * n) > RDRAMSize)
 		return;
@@ -1185,59 +1102,188 @@ void gSPCBFDVertex( u32 a, u32 n, u32 v0 )
 			gSPUpdateLookatVectors();
 	}
 
-	Vertex *vertex = (Vertex*)&RDRAM[address];
+	const Vertex *vertex = (Vertex*)&RDRAM[address];
+	SPVertex * spVtx = dwnd().getDrawer().getVertexPtr(0);
+	u32 i = gSPLoadCBFDVertexData<VEC_OPT>(vertex, spVtx, v0, v0, n);
+	if (i < n + v0)
+		gSPLoadCBFDVertexData<1>(vertex + (i - v0), spVtx, v0, i, n);
+}
 
-	GraphicsDrawer & drawer = dwnd().getDrawer();
-	if ((n + v0) <= INDEXMAP_SIZE) {
-		unsigned int i = v0;
-#ifdef __VEC4_OPT
-		for (; i < n - (n%4) + v0; i += 4) {
-			u32 v = i;
-			for(int j = 0; j < 4; ++j) {
-				SPVertex & vtx = drawer.getVertex(v+j);
-				vtx.x = vertex->x;
-				vtx.y = vertex->y;
-				vtx.z = vertex->z;
-				vtx.s = _FIXED2FLOAT( vertex->s, 5 );
-				vtx.t = _FIXED2FLOAT( vertex->t, 5 );
-				if (gSP.geometryMode & G_LIGHTING) {
-					const u32 normaleAddrOffset = ((v+j)<<1);
-					vtx.nx = _FIXED2FLOAT(((s8*)RDRAM)[(gSP.vertexNormalBase + normaleAddrOffset + 0) ^ 3], 7);
-					vtx.ny = _FIXED2FLOAT(((s8*)RDRAM)[(gSP.vertexNormalBase + normaleAddrOffset + 1) ^ 3], 7);
-					vtx.nz = _FIXED2FLOAT((s8)(vertex->flag & 0xFF), 7);
-				}
-				vtx.r = vertex->color.r * 0.0039215689f;
-				vtx.g = vertex->color.g * 0.0039215689f;
-				vtx.b = vertex->color.b * 0.0039215689f;
-				vtx.a = vertex->color.a * 0.0039215689f;
-				vertex++;
+static
+void calcF3DAMTexCoords(const Vertex * _vertex, SPVertex & _vtx)
+{
+	const u32 s0 = (u32)_vertex->s;
+	const u32 t0 = (u32)_vertex->t;
+	const u32 acum_0 = ((_SHIFTR(gSP.textureCoordScaleOrg, 0, 16) * t0) << 1) + 0x8000;
+	const u32 acum_1 = ((_SHIFTR(gSP.textureCoordScale[1], 0, 16) * t0) << 1) + 0x8000;
+	const u32 sres = ((_SHIFTR(gSP.textureCoordScaleOrg, 16, 16) * s0) << 1) + acum_0;
+	const u32 tres = ((_SHIFTR(gSP.textureCoordScale[1], 16, 16) * s0) << 1) + acum_1;
+	const s16 s = _SHIFTR(sres, 16, 16) + _SHIFTR(gSP.textureCoordScale[0], 16, 16);
+	const s16 t = _SHIFTR(tres, 16, 16) + _SHIFTR(gSP.textureCoordScale[0], 0, 16);
+
+	_vtx.s = _FIXED2FLOAT( s, 5 );
+	_vtx.t = _FIXED2FLOAT( t, 5 );
+}
+
+template <u32 VNUM>
+u32 gSPLoadF3DAMVertexData(const Vertex *orgVtx, SPVertex * spVtx, u32 v0, u32 vi, u32 n)
+{
+	const u32 end = n - (n%VNUM) + v0;
+	for (; vi < end; vi += VNUM) {
+		for(u32 j = 0; j < VNUM; ++j) {
+			SPVertex & vtx = spVtx[vi+j];
+			vtx.x = orgVtx->x;
+			vtx.y = orgVtx->y;
+			vtx.z = orgVtx->z;
+			//vtx.flag = orgVtx->flag;
+			calcF3DAMTexCoords(orgVtx, vtx);
+			if (gSP.geometryMode & G_LIGHTING) {
+				vtx.nx = _FIXED2FLOATCOLOR( orgVtx->normal.x, 7 );
+				vtx.ny = _FIXED2FLOATCOLOR( orgVtx->normal.y, 7 );
+				vtx.nz = _FIXED2FLOATCOLOR( orgVtx->normal.z, 7 );
+				vtx.a = orgVtx->color.a * 0.0039215689f;
+			} else {
+				vtx.r = orgVtx->color.r * 0.0039215689f;
+				vtx.g = orgVtx->color.g * 0.0039215689f;
+				vtx.b = orgVtx->color.b * 0.0039215689f;
+				vtx.a = orgVtx->color.a * 0.0039215689f;
 			}
-			gSPProcessVertex4(v);
+			++orgVtx;
 		}
-#endif
-		for (; i < n + v0; ++i) {
-			u32 v = i;
-			SPVertex & vtx = drawer.getVertex(v);
+		gSPProcessVertex<VNUM>(vi, spVtx);
+	}
+	return vi;
+}
+
+void gSPF3DAMVertex(u32 a, u32 n, u32 v0)
+{
+	DebugMsg(DEBUG_NORMAL, "gSPF3DAMVertex n = %i, v0 = %i, from %08x\n", n, v0, a);
+
+	if ((n + v0) > INDEXMAP_SIZE) {
+		LOG(LOG_ERROR, "Using Vertex outside buffer v0=%i, n=%i\n", v0, n);
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "//Using Vertex outside buffer v0 = %i, n = %i\n", v0, n);
+		return;
+	}
+
+	const u32 address = RSP_SegmentToPhysical(a);
+
+	if ((address + sizeof(Vertex)* n) > RDRAMSize) {
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "gSPF3DAMVertex Using Vertex outside RDRAM n = %i, v0 = %i, from %08x\n", n, v0, a);
+		return;
+	}
+
+	if ((gSP.geometryMode & G_LIGHTING) != 0) {
+
+		if ((gSP.changed & CHANGED_LIGHT) != 0)
+			gSPUpdateLightVectors();
+
+		if (((gSP.geometryMode & G_TEXTURE_GEN) != 0) && ((gSP.changed & CHANGED_LOOKAT) != 0))
+			gSPUpdateLookatVectors();
+	}
+
+	const Vertex *vertex = (Vertex*)&RDRAM[address];
+	SPVertex * spVtx = dwnd().getDrawer().getVertexPtr(0);
+	u32 i = gSPLoadF3DAMVertexData<VEC_OPT>(vertex, spVtx, v0, v0, n);
+	if (i < n + v0)
+		gSPLoadF3DAMVertexData<1>(vertex + (i - v0), spVtx, v0, i, n);
+}
+
+template <u32 VNUM>
+u32 gSPLoadSWVertexData(const SWVertex *orgVtx, SPVertex * spVtx, u32 v0, u32 vi, u32 n)
+{
+	const u32 end = n - (n%VNUM) + v0;
+	for (; vi < end; vi += VNUM) {
+		for(u32 j = 0; j < VNUM; ++j) {
+			SPVertex & vtx = spVtx[vi+j];
+			vtx.x = orgVtx->x;
+			vtx.y = orgVtx->y;
+			vtx.z = orgVtx->z;
+			++orgVtx;
+		}
+		gSPProcessVertex<VNUM>(vi, spVtx);
+		for (u32 j = 0; j < VNUM; ++j) {
+			SPVertex & vtx = spVtx[vi+j];
+			vtx.y = -vtx.y;
+		}
+	}
+	return vi;
+}
+
+void gSPSWVertex(const SWVertex * vertex, u32 n, u32 v0)
+{
+	DebugMsg(DEBUG_NORMAL, "gSPSWVertex n = %i, v0 = %i\n", n, v0);
+
+	if ((n + v0) > INDEXMAP_SIZE) {
+		LOG(LOG_ERROR, "Using Vertex outside buffer v0=%i, n=%i\n", v0, n);
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "//Using Vertex outside buffer v0 = %i, n = %i\n", v0, n);
+		return;
+	}
+
+	SPVertex * spVtx = dwnd().getDrawer().getVertexPtr(0);
+	u32 i = gSPLoadSWVertexData<VEC_OPT>(vertex, spVtx, v0, v0, n);
+	if (i < n + v0)
+		gSPLoadSWVertexData<1>(vertex + (i - v0), spVtx, v0, i, n);
+}
+
+void gSPT3DUXVertex(u32 a, u32 n, u32 ci)
+{
+	const u32 address = RSP_SegmentToPhysical(a);
+	const u32 colors = RSP_SegmentToPhysical(ci);
+
+	struct T3DUXVertex {
+		s16 y;
+		s16 x;
+		u16 flag;
+		s16 z;
+	} *vertex = (T3DUXVertex*)&RDRAM[address];
+
+	struct T3DUXColor
+	{
+		u8 a;
+		u8 b;
+		u8 g;
+		u8 r;
+	} *color = (T3DUXColor*)&RDRAM[colors];
+
+	if ((address + sizeof(T3DUXVertex)* n) > RDRAMSize)
+		return;
+
+	SPVertex * spVtx = dwnd().getDrawer().getVertexPtr(0);
+	u32 i = 0;
+#ifdef __VEC4_OPT
+	for (; i < n - (n % 4); i += 4) {
+		u32 v = i;
+		for (int j = 0; j < 4; ++j) {
+			SPVertex & vtx = spVtx[v+j];
 			vtx.x = vertex->x;
 			vtx.y = vertex->y;
 			vtx.z = vertex->z;
-			vtx.s = _FIXED2FLOAT( vertex->s, 5 );
-			vtx.t = _FIXED2FLOAT( vertex->t, 5 );
-			if (gSP.geometryMode & G_LIGHTING) {
-				const u32 normaleAddrOffset = (v<<1);
-				vtx.nx = _FIXED2FLOAT(((s8*)RDRAM)[(gSP.vertexNormalBase + normaleAddrOffset + 0) ^ 3], 7);
-				vtx.ny = _FIXED2FLOAT(((s8*)RDRAM)[(gSP.vertexNormalBase + normaleAddrOffset + 1) ^ 3], 7);
-				vtx.nz = _FIXED2FLOAT((s8)(vertex->flag & 0xFF), 7);
-			}
-			vtx.r = vertex->color.r * 0.0039215689f;
-			vtx.g = vertex->color.g * 0.0039215689f;
-			vtx.b = vertex->color.b * 0.0039215689f;
-			vtx.a = vertex->color.a * 0.0039215689f;
-			gSPProcessVertex(v);
+			vtx.s = 0;
+			vtx.t = 0;
+			vtx.r = _FIXED2FLOATCOLOR(color->r, 8);
+			vtx.g = _FIXED2FLOATCOLOR(color->g, 8);
+			vtx.b = _FIXED2FLOATCOLOR(color->b, 8);
+			vtx.a = _FIXED2FLOATCOLOR(color->a, 8);
 			vertex++;
+			color++;
 		}
-	} else {
-		LOG(LOG_ERROR, "Using Vertex outside buffer v0=%i, n=%i\n", v0, n);
+		gSPProcessVertex<4>(v, spVtx);
+	}
+#endif
+	for (; i < n; ++i) {
+		SPVertex & vtx = spVtx[i];
+		vtx.x = vertex->x;
+		vtx.y = vertex->y;
+		vtx.z = vertex->z;
+		vtx.s = 0;
+		vtx.t = 0;
+		vtx.r = _FIXED2FLOATCOLOR(color->r, 8);
+		vtx.g = _FIXED2FLOATCOLOR(color->g, 8);
+		vtx.b = _FIXED2FLOATCOLOR(color->b, 8);
+		vtx.a = _FIXED2FLOATCOLOR(color->a, 8);
+		gSPProcessVertex<1>(i, spVtx);
+		vertex++;
+		color++;
 	}
 }
 
@@ -1246,30 +1292,20 @@ void gSPDisplayList( u32 dl )
 	u32 address = RSP_SegmentToPhysical( dl );
 
 	if ((address + 8) > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR, "// Attempting to load display list from invalid address\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPDisplayList( 0x%08X );\n",
-			dl );
-#endif
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to load display list from invalid address\n");
+		DebugMsg(DEBUG_NORMAL, "gSPDisplayList( 0x%08X );\n", dl );
 		return;
 	}
 
 	if (RSP.PCi < (GBI.PCStackSize - 1)) {
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "\n" );
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPDisplayList( 0x%08X );\n",
-		dl );
-#endif
+		DebugMsg(DEBUG_NORMAL, "gSPDisplayList( 0x%08X ) push\n", dl);
 		RSP.PCi++;
 		RSP.PC[RSP.PCi] = address;
 		RSP.nextCmd = _SHIFTR( *(u32*)&RDRAM[address], 24, 8 );
-	}
-	else
-	{
+	} else {
 		assert(false);
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR, "// PC stack overflow\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPDisplayList( 0x%08X );\n",
-			dl );
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// PC stack overflow\n");
+		DebugMsg(DEBUG_NORMAL, "gSPDisplayList( 0x%08X );\n", dl );
 	}
 }
 
@@ -1278,33 +1314,32 @@ void gSPBranchList( u32 dl )
 	u32 address = RSP_SegmentToPhysical( dl );
 
 	if ((address + 8) > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR, "// Attempting to branch to display list at invalid address\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPBranchList( 0x%08X );\n",
-			dl );
-#endif
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to branch to display list at invalid address\n");
+		DebugMsg(DEBUG_NORMAL, "gSPBranchList( 0x%08X );\n", dl );
 		return;
 	}
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPBranchList( 0x%08X );\n",
-		dl );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPBranchList( 0x%08X ) nopush\n", dl );
+
+	if (((config.generalEmulation.hacks & hack_Infloop) != 0) && (address == (RSP.PC[RSP.PCi] - 8))) {
+		RSP.infloop = true;
+		RSP.PC[RSP.PCi] -= 8;
+		*REG.SP_STATUS &= ~(SP_STATUS_TASKDONE | SP_STATUS_HALT | SP_STATUS_BROKE);
+		RSP.halt = true;
+		return;
+	}
 
 	RSP.PC[RSP.PCi] = address;
 	RSP.nextCmd = _SHIFTR( *(u32*)&RDRAM[address], 24, 8 );
 }
 
-void gSPBranchLessZ( u32 branchdl, u32 vtx, u32 zval )
+void gSPBranchLessZ(u32 branchdl, u32 vtx, u32 zval)
 {
 	const u32 address = RSP_SegmentToPhysical( branchdl );
 
 	if ((address + 8) > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR, "// Specified display list at invalid address\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPBranchLessZ( 0x%08X, %i, %i );\n",
-			branchdl, vtx, zval );
-#endif
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Specified display list at invalid address\n");
+		DebugMsg(DEBUG_NORMAL, "gSPBranchLessZ( 0x%08X, %i, %i );\n", branchdl, vtx, zval );
 		return;
 	}
 
@@ -1313,10 +1348,7 @@ void gSPBranchLessZ( u32 branchdl, u32 vtx, u32 zval )
 	if (zTest > 0x03FF || zTest <= zval)
 		RSP.PC[RSP.PCi] = address;
 
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPBranchLessZ( 0x%08X, %i, %i );\n",
-			branchdl, vtx, zval );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPBranchLessZ( 0x%08X, %i, %i );\n", branchdl, vtx, zval );
 }
 
 void gSPBranchLessW( u32 branchdl, u32 vtx, u32 wval )
@@ -1324,11 +1356,8 @@ void gSPBranchLessW( u32 branchdl, u32 vtx, u32 wval )
 	const u32 address = RSP_SegmentToPhysical( branchdl );
 
 	if ((address + 8) > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR, "// Specified display list at invalid address\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPBranchLessZ( 0x%08X, %i, %i );\n",
-			branchdl, vtx, wval );
-#endif
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Specified display list at invalid address\n");
+		DebugMsg(DEBUG_NORMAL, "gSPBranchLessW( 0x%08X, %i, %i );\n", branchdl, vtx, wval);
 		return;
 	}
 
@@ -1336,28 +1365,25 @@ void gSPBranchLessW( u32 branchdl, u32 vtx, u32 wval )
 	if (v.w < (float)wval)
 		RSP.PC[RSP.PCi] = address;
 
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPBranchLessZ( 0x%08X, %i, %i );\n",
-			branchdl, vtx, wval );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPBranchLessZ( 0x%08X, %i, %i );\n", branchdl, vtx, wval);
 }
 
 void gSPDlistCount(u32 count, u32 v)
 {
 	u32 address = RSP_SegmentToPhysical( v );
 	if (address == 0 || (address + 8) > RDRAMSize) {
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR, "// Attempting to branch to display list at invalid address\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPDlistCnt(%d, 0x%08X );\n", count, v );
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to branch to display list at invalid address\n");
+		DebugMsg(DEBUG_NORMAL, "gSPDlistCnt(%d, 0x%08X );\n", count, v);
 		return;
 	}
 
 	if (RSP.PCi >= 9) {
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR, "// ** DL stack overflow **\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPDlistCnt(%d, 0x%08X );\n", count, v );
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// ** DL stack overflow **\n");
+		DebugMsg(DEBUG_NORMAL, "gSPDlistCnt(%d, 0x%08X );\n", count, v);
 		return;
 	}
 
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPDlistCnt(%d, 0x%08X );\n", count, v );
+	DebugMsg(DEBUG_NORMAL, "gSPDlistCnt(%d, 0x%08X );\n", count, v);
 
 	++RSP.PCi;  // go to the next PC in the stack
 	RSP.PC[RSP.PCi] = address;  // jump to the address
@@ -1370,10 +1396,7 @@ void gSPSetDMAOffsets( u32 mtxoffset, u32 vtxoffset )
 	gSP.DMAOffsets.mtx = mtxoffset;
 	gSP.DMAOffsets.vtx = vtxoffset;
 
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPSetDMAOffsets( 0x%08X, 0x%08X );\n",
-			mtxoffset, vtxoffset );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPSetDMAOffsets( 0x%08X, 0x%08X );\n", mtxoffset, vtxoffset );
 }
 
 void gSPSetDMATexOffset(u32 _addr)
@@ -1387,30 +1410,22 @@ void gSPSetVertexColorBase( u32 base )
 {
 	gSP.vertexColorBase = RSP_SegmentToPhysical( base );
 
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPSetVertexColorBase( 0x%08X );\n",
-			base );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPSetVertexColorBase( 0x%08X );\n", base );
 }
 
 void gSPSetVertexNormaleBase( u32 base )
 {
 	gSP.vertexNormalBase = RSP_SegmentToPhysical( base );
 
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPSetVertexNormaleBase( 0x%08X );\n",
-			base );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPSetVertexNormaleBase( 0x%08X );\n", base );
 }
 
 void gSPDMATriangles( u32 tris, u32 n ){
 	const u32 address = RSP_SegmentToPhysical( tris );
 
 	if (address + sizeof( DKRTriangle ) * n > RDRAMSize) {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR | DEBUG_TRIANGLE, "// Attempting to load triangles from invalid address\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_TRIANGLE, "gSPDMATriangles( 0x%08X, %i );\n" );
-#endif
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to load triangles from invalid address\n");
+		DebugMsg(DEBUG_NORMAL, "gSPDMATriangles( 0x%08X, %i );\n");
 		return;
 	}
 
@@ -1456,6 +1471,7 @@ void gSPDMATriangles( u32 tris, u32 n ){
 		++pVtx;
 		++triangles;
 	}
+	DebugMsg(DEBUG_NORMAL, "gSPDMATriangles( 0x%08X, %i );\n");
 	drawer.drawDMATriangles(pVtx - drawer.getDMAVerticesData());
 }
 
@@ -1465,10 +1481,7 @@ void gSP1Quadrangle( s32 v0, s32 v1, s32 v2, s32 v3 )
 	gSPTriangle( v0, v2, v3);
 	gSPFlushTriangles();
 
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_TRIANGLE, "gSP1Quadrangle( %i, %i, %i, %i );\n",
-			v0, v1, v2, v3 );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSP1Quadrangle( %i, %i, %i, %i );\n", v0, v1, v2, v3 );
 }
 
 bool gSPCullVertices( u32 v0, u32 vn )
@@ -1495,42 +1508,28 @@ void gSPCullDisplayList( u32 v0, u32 vn )
 		if (RSP.PCi > 0)
 			RSP.PCi--;
 		else {
-#ifdef DEBUG
-			DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED, "// End of display list, halting execution\n" );
-#endif
-			RSP.halt = TRUE;
+			DebugMsg(DEBUG_NORMAL, "End of display list, halting execution\n");
+			RSP.halt = true;
 		}
-#ifdef DEBUG
-		DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED, "// Culling display list\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPCullDisplayList( %i, %i );\n\n",
-			v0, vn );
-#endif
+		DebugMsg( DEBUG_DETAIL, "// Culling display list\n" );
+		DebugMsg(DEBUG_NORMAL, "gSPCullDisplayList( %i, %i );\n\n", v0, vn );
+	} else {
+		DebugMsg( DEBUG_DETAIL, "// Not culling display list\n" );
+		DebugMsg(DEBUG_NORMAL, "gSPCullDisplayList( %i, %i );\n", v0, vn);
 	}
-#ifdef DEBUG
-	else {
-		DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED, "// Not culling display list\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPCullDisplayList( %i, %i );\n",
-			v0, vn );
-	}
-#endif
 }
 
-void gSPPopMatrixN( u32 param, u32 num )
+void gSPPopMatrixN(u32 param, u32 num)
 {
 	if (gSP.matrix.modelViewi > num - 1) {
 		gSP.matrix.modelViewi -= num;
-
-		gSP.changed |= CHANGED_MATRIX;
+		gSP.changed |= CHANGED_MATRIX | CHANGED_LIGHT | CHANGED_LOOKAT;
+	} else {
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to pop matrix stack below 0\n");
 	}
-#ifdef DEBUG
-	else
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR | DEBUG_MATRIX, "// Attempting to pop matrix stack below 0\n" );
-
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_MATRIX, "gSPPopMatrixN( %s, %i );\n",
+	DebugMsg(DEBUG_NORMAL, "gSPPopMatrixN( %s, %i );\n",
 		(param == G_MTX_MODELVIEW) ? "G_MTX_MODELVIEW" :
-		(param == G_MTX_PROJECTION) ? "G_MTX_PROJECTION" : "G_MTX_INVALID",
-		num );
-#endif
+		(param == G_MTX_PROJECTION) ? "G_MTX_PROJECTION" : "G_MTX_INVALID",	num );
 }
 
 void gSPPopMatrix( u32 param )
@@ -1540,37 +1539,36 @@ void gSPPopMatrix( u32 param )
 		if (gSP.matrix.modelViewi > 0) {
 			gSP.matrix.modelViewi--;
 
-			gSP.changed |= CHANGED_MATRIX;
+			gSP.changed |= CHANGED_MATRIX | CHANGED_LIGHT | CHANGED_LOOKAT;
 		}
 	break;
 	case 1: // projection, can't
 	break;
 	default:
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR | DEBUG_MATRIX, "// Attempting to pop matrix stack below 0\n" );
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_MATRIX, "gSPPopMatrix( %s );\n",
-			(param == G_MTX_MODELVIEW) ? "G_MTX_MODELVIEW" :
-			(param == G_MTX_PROJECTION) ? "G_MTX_PROJECTION" : "G_MTX_INVALID" );
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Attempting to pop matrix stack below 0\n");
 	}
+	DebugMsg(DEBUG_NORMAL, "gSPPopMatrix( %s );\n",
+		(param == G_MTX_MODELVIEW) ? "G_MTX_MODELVIEW" :
+		(param == G_MTX_PROJECTION) ? "G_MTX_PROJECTION" : "G_MTX_INVALID");
 }
 
 void gSPSegment( s32 seg, s32 base )
 {
 	gSP.segment[seg] = base;
 
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPSegment( %s, 0x%08X );\n",
-		SegmentText[seg], base );
+	DebugMsg(DEBUG_NORMAL, "gSPSegment( %s, 0x%08X );\n", SegmentText[seg], base );
 }
 
 void gSPClipRatio( u32 r )
 {
+	DebugMsg(DEBUG_NORMAL|DEBUG_IGNORED, "gSPClipRatio(%u);\n", r);
 }
 
 void gSPInsertMatrix( u32 where, u32 num )
 {
-	f32 fraction, integer;
+	DebugMsg(DEBUG_NORMAL, "gSPInsertMatrix(%u, %u);\n", where, num);
 
-	if (gSP.changed & CHANGED_MATRIX)
-		gSPCombineMatrices();
+	f32 fraction, integer;
 
 	if ((where & 0x3) || (where > 0x3C))
 		return;
@@ -1615,16 +1613,19 @@ void gSPModifyVertex( u32 _vtx, u32 _where, u32 _val )
 			vtx0.g = _SHIFTR( _val, 16, 8 ) * 0.0039215689f;
 			vtx0.b = _SHIFTR( _val, 8, 8 ) * 0.0039215689f;
 			vtx0.a = _SHIFTR( _val, 0, 8 ) * 0.0039215689f;
-			vtx0.modify|= MODIFY_RGBA;
-		break;
+			vtx0.modify |= MODIFY_RGBA;
+			DebugMsg(DEBUG_NORMAL, "gSPModifyVertex: RGBA(%02f, %02f, %02f, %02f);\n", vtx0.r, vtx0.g, vtx0.b, vtx0.a);
+			break;
 		case G_MWO_POINT_ST:
 			vtx0.s = _FIXED2FLOAT( (s16)_SHIFTR( _val, 16, 16 ), 5 ) / gSP.texture.scales;
 			vtx0.t = _FIXED2FLOAT((s16)_SHIFTR(_val, 0, 16), 5) / gSP.texture.scalet;
 			//vtx0.modify |= MODIFY_ST; // still neeed to divide by 2 in vertex shader if TexturePersp disabled
-		break;
+			DebugMsg(DEBUG_NORMAL, "gSPModifyVertex: ST(%02f, %02f);\n", vtx0.s, vtx0.t);
+			break;
 		case G_MWO_POINT_XYSCREEN:
 			vtx0.x = _FIXED2FLOAT((s16)_SHIFTR(_val, 16, 16), 2);
 			vtx0.y = _FIXED2FLOAT((s16)_SHIFTR(_val, 0, 16), 2);
+			DebugMsg(DEBUG_NORMAL, "gSPModifyVertex: XY(%02f, %02f);\n", vtx0.x, vtx0.y);
 			if ((config.generalEmulation.hacks & hack_ModifyVertexXyInShader) == 0) {
 				vtx0.x = (vtx0.x - gSP.viewport.vtrans[0]) / gSP.viewport.vscale[0];
 				if (gSP.viewport.vscale[0] < 0)
@@ -1646,6 +1647,7 @@ void gSPModifyVertex( u32 _vtx, u32 _where, u32 _val )
 		case G_MWO_POINT_ZSCREEN:
 		{
 			f32 scrZ = _FIXED2FLOAT((s16)_SHIFTR(_val, 16, 16), 15);
+			DebugMsg(DEBUG_NORMAL, "gSPModifyVertex: Z(%02f);\n", vtx0.z);
 			vtx0.z = (scrZ - gSP.viewport.vtrans[2]) / (gSP.viewport.vscale[2]);
 			vtx0.clip &= ~CLIP_W;
 			vtx0.modify |= MODIFY_Z;
@@ -1659,16 +1661,11 @@ void gSPNumLights( s32 n )
 	if (n < 12) {
 		gSP.numLights = n;
 		gSP.changed |= CHANGED_LIGHT;
+	} else {
+		DebugMsg(DEBUG_NORMAL | DEBUG_ERROR, "// Setting an invalid number of lights\n");
 	}
-#ifdef DEBUG
-	else
-		DebugMsg( DEBUG_HIGH | DEBUG_ERROR, "// Setting an invalid number of lights\n" );
-#endif
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPNumLights( %i );\n",
-		n );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPNumLights( %i );\n", n);
 }
 
 void gSPLightColor( u32 lightNum, u32 packedColor )
@@ -1682,33 +1679,29 @@ void gSPLightColor( u32 lightNum, u32 packedColor )
 		gSP.lights.rgb[lightNum][B] = _SHIFTR( packedColor, 8, 8 ) * 0.0039215689f;
 		gSP.changed |= CHANGED_HW_LIGHT;
 	}
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPLightColor( %i, 0x%08X );\n",
-		lightNum, packedColor );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPLightColor( %i, 0x%08X );\n", lightNum, packedColor );
 }
 
 void gSPFogFactor( s16 fm, s16 fo )
 {
 	gSP.fog.multiplier = fm;
 	gSP.fog.offset = fo;
+	gSP.fog.multiplierf = _FIXED2FLOAT(fm, 8);
+	gSP.fog.offsetf = _FIXED2FLOAT(fo, 8);
 
 	gSP.changed |= CHANGED_FOGPOSITION;
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPFogFactor( %i, %i );\n", fm, fo );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPFogFactor( %i, %i );\n", fm, fo);
 }
 
 void gSPPerspNormalize( u16 scale )
 {
-#ifdef DEBUG
-		DebugMsg( DEBUG_HIGH | DEBUG_UNHANDLED, "gSPPerspNormalize( %i );\n", scale );
-#endif
+	DebugMsg(DEBUG_NORMAL| DEBUG_IGNORED, "gSPPerspNormalize( %i );\n", scale);
 }
 
 void gSPCoordMod(u32 _w0, u32 _w1)
 {
-	if ((_w0&8) != 0)
+	DebugMsg(DEBUG_NORMAL, "gSPCoordMod( %u, %u );\n", _w0, _w1);
+	if ((_w0 & 8) != 0)
 		return;
 	u32 idx = _SHIFTR(_w0, 1, 2);
 	u32 pos = _w0&0x30;
@@ -1730,8 +1723,10 @@ void gSPCoordMod(u32 _w0, u32 _w1)
 void gSPTexture( f32 sc, f32 tc, s32 level, s32 tile, s32 on )
 {
 	gSP.texture.on = on;
-	if (on == 0)
+	if (on == 0) {
+		DebugMsg(DEBUG_NORMAL, "gSPTexture skipped b/c of off\n");
 		return;
+	}
 
 	gSP.texture.scales = sc;
 	gSP.texture.scalet = tc;
@@ -1747,27 +1742,19 @@ void gSPTexture( f32 sc, f32 tc, s32 level, s32 tile, s32 on )
 
 	gSP.changed |= CHANGED_TEXTURE;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED | DEBUG_TEXTURE, "gSPTexture( %f, %f, %i, %i, %i );\n",
-		sc, tc, level, tile, on );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPTexture:  tile: %d, mipmap_lvl: %d, on: %d, s_scale: %f, t_scale: %f\n", tile, level, on, sc, tc);
 }
 
 void gSPEndDisplayList()
 {
 	if (RSP.PCi > 0)
 		--RSP.PCi;
-	else
-	{
-#ifdef DEBUG
-		DebugMsg( DEBUG_DETAIL | DEBUG_HANDLED, "// End of display list, halting execution\n" );
-#endif
-		RSP.halt = TRUE;
+	else {
+		DebugMsg( DEBUG_NORMAL, "End of display list, halting execution\n" );
+		RSP.halt = true;
 	}
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPEndDisplayList();\n\n" );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPEndDisplayList();\n\n");
 }
 
 void gSPGeometryMode( u32 clear, u32 set )
@@ -1776,8 +1763,7 @@ void gSPGeometryMode( u32 clear, u32 set )
 
 	gSP.changed |= CHANGED_GEOMETRYMODE;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPGeometryMode( %s%s%s%s%s%s%s%s%s%s, %s%s%s%s%s%s%s%s%s%s );\n",
+	DebugMsg(DEBUG_NORMAL, "gSPGeometryMode( %s%s%s%s%s%s%s%s%s%s, %s%s%s%s%s%s%s%s%s%s );\n",
 		clear & G_SHADE ? "G_SHADE | " : "",
 		clear & G_LIGHTING ? "G_LIGHTING | " : "",
 		clear & G_SHADING_SMOOTH ? "G_SHADING_SMOOTH | " : "",
@@ -1798,7 +1784,6 @@ void gSPGeometryMode( u32 clear, u32 set )
 		set & G_CULL_BACK ? "G_CULL_BACK | " : "",
 		set & G_FOG ? "G_FOG | " : "",
 		set & G_CLIPPING ? "G_CLIPPING" : "" );
-#endif
 }
 
 void gSPSetGeometryMode( u32 mode )
@@ -1806,8 +1791,8 @@ void gSPSetGeometryMode( u32 mode )
 	gSP.geometryMode |= mode;
 
 	gSP.changed |= CHANGED_GEOMETRYMODE;
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPSetGeometryMode( %s%s%s%s%s%s%s%s%s%s );\n",
+
+	DebugMsg(DEBUG_NORMAL, "gSPSetGeometryMode( %s%s%s%s%s%s%s%s%s%s );\n",
 		mode & G_SHADE ? "G_SHADE | " : "",
 		mode & G_LIGHTING ? "G_LIGHTING | " : "",
 		mode & G_SHADING_SMOOTH ? "G_SHADING_SMOOTH | " : "",
@@ -1818,7 +1803,6 @@ void gSPSetGeometryMode( u32 mode )
 		mode & G_CULL_BACK ? "G_CULL_BACK | " : "",
 		mode & G_FOG ? "G_FOG | " : "",
 		mode & G_CLIPPING ? "G_CLIPPING" : "" );
-#endif
 }
 
 void gSPClearGeometryMode( u32 mode )
@@ -1827,8 +1811,7 @@ void gSPClearGeometryMode( u32 mode )
 
 	gSP.changed |= CHANGED_GEOMETRYMODE;
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_HANDLED, "gSPClearGeometryMode( %s%s%s%s%s%s%s%s%s%s );\n",
+	DebugMsg(DEBUG_NORMAL, "gSPClearGeometryMode( %s%s%s%s%s%s%s%s%s%s );\n",
 		mode & G_SHADE ? "G_SHADE | " : "",
 		mode & G_LIGHTING ? "G_LIGHTING | " : "",
 		mode & G_SHADING_SMOOTH ? "G_SHADING_SMOOTH | " : "",
@@ -1839,7 +1822,6 @@ void gSPClearGeometryMode( u32 mode )
 		mode & G_CULL_BACK ? "G_CULL_BACK | " : "",
 		mode & G_FOG ? "G_FOG | " : "",
 		mode & G_CLIPPING ? "G_CLIPPING" : "" );
-#endif
 }
 
 void gSPSetOtherMode_H(u32 _length, u32 _shift, u32 _data)
@@ -1849,6 +1831,48 @@ void gSPSetOtherMode_H(u32 _length, u32 _shift, u32 _data)
 
 	if (mask & 0x00300000)  // cycle type
 		gDP.changed |= CHANGED_CYCLETYPE;
+
+	DebugMsg(DEBUG_NORMAL, "gSPSetOtherMode_H");
+#ifdef DEBUG_DUMP
+	std::string strRes;
+	if (mask & 0x00000030) {
+		strRes.append(AlphaDitherText[(gDP.otherMode.h>>4) & 3]);
+		strRes.append(" | ");
+	}
+
+	if (mask & 0x000000C0) {
+		strRes.append(ColorDitherText[(gDP.otherMode.h >> 6) & 3]);
+		strRes.append(" | ");
+	}
+
+	if (mask & 0x00003000) {
+		strRes.append(TextureFilterText[(gDP.otherMode.h & 0x00003000) >> 12]);
+		strRes.append(" | ");
+	}
+
+	if (mask & 0x0000C000) {
+		strRes.append(TextureLUTText[(gDP.otherMode.h & 0x0000C000) >> 14]);
+		strRes.append(" | ");
+	}
+
+	if (mask & 0x00300000) {
+		strRes.append(CycleTypeText[(gDP.otherMode.h & 0x00300000) >> 20]);
+		strRes.append(" | ");
+	}
+
+	if (mask & 0x00010000) {
+		strRes.append("LOD_en : ");
+		strRes.append((gDP.otherMode.h & 0x00010000) ? "yes | " : "no | ");
+	}
+
+	if (mask & 0x00080000) {
+		strRes.append("Persp_en : ");
+		strRes.append((gDP.otherMode.h & 0x00080000) ? "yes" : "no");
+	}
+
+	DebugMsg(DEBUG_NORMAL, "( %s)", strRes.c_str());
+#endif
+	DebugMsg(DEBUG_NORMAL, " result: %08x\n", gDP.otherMode.h);
 }
 
 void gSPSetOtherMode_L(u32 _length, u32 _shift, u32 _data)
@@ -1861,29 +1885,50 @@ void gSPSetOtherMode_L(u32 _length, u32 _shift, u32 _data)
 
 	if (mask & 0xFFFFFFF8)  // rendermode / blender bits
 		gDP.changed |= CHANGED_RENDERMODE;
+
+	DebugMsg(DEBUG_NORMAL, "gSPSetOtherMode_L");
+#ifdef DEBUG_DUMP
+	std::string strRes;
+
+	if (mask & 0x00000003) {
+		strRes.append(AlphaCompareText[gDP.otherMode.l & 0x00000003]);
+		strRes.append(" | ");
+	}
+
+	if (mask & 0x00000004) {
+		strRes.append(DepthSourceText[(gDP.otherMode.l & 0x00000004) >> 2]);
+		strRes.append(" | ");
+	}
+
+	if (mask & 0xFFFFFFF8)  { // rendermode / blender bits
+		strRes.append(" rendermode");
+	}
+
+	DebugMsg(DEBUG_NORMAL, "( %s)", strRes.c_str());
+#endif
+	DebugMsg(DEBUG_NORMAL, " result: %08x\n", gDP.otherMode.l);
 }
 
 void gSPLine3D( s32 v0, s32 v1, s32 flag )
 {
 	dwnd().getDrawer().drawLine(v0, v1, 1.5f);
 
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_UNHANDLED, "gSPLine3D( %i, %i, %i );\n", v0, v1, flag );
-#endif
+	DebugMsg(DEBUG_NORMAL, "gSPLine3D( %i, %i, %i )\n", v0, v1, flag);
 }
 
 void gSPLineW3D( s32 v0, s32 v1, s32 wd, s32 flag )
 {
 	dwnd().getDrawer().drawLine(v0, v1, 1.5f + wd * 0.5f);
-#ifdef DEBUG
-	DebugMsg( DEBUG_HIGH | DEBUG_UNHANDLED, "gSPLineW3D( %i, %i, %i, %i );\n", v0, v1, wd, flag );
-#endif
+
+	DebugMsg(DEBUG_NORMAL, "gSPLineW3D( %i, %i, %i, %i )\n", v0, v1, wd, flag);
 }
 
 void gSPSetStatus(u32 sid, u32 val)
 {
 	assert(sid <= 12);
 	gSP.status[sid>>2] = val;
+
+	DebugMsg(DEBUG_NORMAL, "gSPSetStatus sid=%u val=%u\n", sid, val);
 }
 
 void gSPObjLoadTxtr( u32 tx )
@@ -1897,17 +1942,20 @@ void gSPObjLoadTxtr( u32 tx )
 				gDPSetTextureImage( 0, 1, 0, objTxtr->block.image );
 				gDPSetTile( 0, 1, 0, objTxtr->block.tmem, 7, 0, 0, 0, 0, 0, 0, 0 );
 				gDPLoadBlock( 7, 0, 0, ((objTxtr->block.tsize + 1) << 3) - 1, objTxtr->block.tline );
+				DebugMsg(DEBUG_NORMAL, "gSPObjLoadTxtr: load block\n");
 				break;
 			case G_OBJLT_TXTRTILE:
 				gDPSetTextureImage( 0, 1, (objTxtr->tile.twidth + 1) << 1, objTxtr->tile.image );
 				gDPSetTile( 0, 1, (objTxtr->tile.twidth + 1) >> 2, objTxtr->tile.tmem, 0, 0, 0, 0, 0, 0, 0, 0 );
 				gDPSetTile( 0, 1, (objTxtr->tile.twidth + 1) >> 2, objTxtr->tile.tmem, 7, 0, 0, 0, 0, 0, 0, 0 );
 				gDPLoadTile( 7, 0, 0, (((objTxtr->tile.twidth + 1) << 1) - 1) << 2, (((objTxtr->tile.theight + 1) >> 2) - 1) << 2 );
+				DebugMsg(DEBUG_NORMAL, "gSPObjLoadTxtr: load tile\n");
 				break;
 			case G_OBJLT_TLUT:
 				gDPSetTextureImage( 0, 2, 1, objTxtr->tlut.image );
 				gDPSetTile( 0, 2, 0, objTxtr->tlut.phead, 7, 0, 0, 0, 0, 0, 0, 0 );
 				gDPLoadTLUT( 7, 0, 0, objTxtr->tlut.pnum << 2, 0 );
+				DebugMsg(DEBUG_NORMAL, "gSPObjLoadTxtr: load tlut\n");
 				break;
 		}
 		gSP.status[objTxtr->block.sid >> 2] = (gSP.status[objTxtr->block.sid >> 2] & ~objTxtr->block.mask) | (objTxtr->block.flag & objTxtr->block.mask);
@@ -2014,17 +2062,13 @@ struct ObjCoordinates
 
 		ulx = frameX;
 		uly = frameY;
-		lrx = frameX + min(imageW/scaleW, frameW) - 1.0f;
-		lry = frameY + min(imageH/scaleH, frameH) - 1.0f;
-		if (gDP.otherMode.cycleType == G_CYC_COPY) {
-			lrx += 1.0f;
-			lry += 1.0f;;
-		}
+		lrx = frameX + min(imageW/scaleW, frameW);
+		lry = frameY + min(imageH/scaleH, frameH);
 
 		uls = imageX;
 		ult = imageY;
-		lrs = uls + (lrx - ulx) * scaleW;
-		lrt = ult + (lry - uly) * scaleH;
+		lrs = uls + (lrx - ulx - 1.0f) * scaleW;
+		lrt = ult + (lry - uly - 1.0f) * scaleH;
 		if (gDP.otherMode.cycleType != G_CYC_COPY) {
 			if ((gSP.objRendermode&G_OBJRM_SHRINKSIZE_1) != 0) {
 				lrs -= 1.0f / scaleW;
@@ -2155,6 +2199,7 @@ void gSPObjRectangle(u32 _sp)
 	gSPSetSpriteTile(objSprite);
 	ObjCoordinates objCoords(objSprite, false);
 	gSPDrawObjRect(objCoords);
+	DebugMsg(DEBUG_NORMAL, "gSPObjRectangle\n");
 }
 
 void gSPObjRectangleR(u32 _sp)
@@ -2167,6 +2212,8 @@ void gSPObjRectangleR(u32 _sp)
 	if (objSprite->imageFmt == G_IM_FMT_YUV && (config.generalEmulation.hacks&hack_Ogre64)) //Ogre Battle needs to copy YUV texture to frame buffer
 		_drawYUVImageToFrameBuffer(objCoords);
 	gSPDrawObjRect(objCoords);
+
+	DebugMsg(DEBUG_NORMAL, "gSPObjRectangleR\n");
 }
 
 static
@@ -2259,7 +2306,7 @@ void _loadBGImage(const uObjScaleBg * _bgInfo, bool _loadScale)
 				return;
 			}
 
-			gDP.tiles[0].frameBuffer = pBuffer;
+			gDP.tiles[0].frameBufferAddress = pBuffer->m_startAddress;
 			gDP.tiles[0].textureMode = TEXTUREMODE_FRAMEBUFFER_BG;
 			gDP.tiles[0].loadType = LOADTYPE_TILE;
 			gDP.changed |= CHANGED_TMEM;
@@ -2292,6 +2339,8 @@ void gSPBgRect1Cyc( u32 _bg )
 
 	ObjCoordinates objCoords(objScaleBg);
 	gSPDrawObjRect(objCoords);
+
+	DebugMsg(DEBUG_NORMAL, "gSPBgRect1Cyc\n");
 }
 
 void gSPBgRectCopy( u32 _bg )
@@ -2310,6 +2359,8 @@ void gSPBgRectCopy( u32 _bg )
 
 	ObjCoordinates objCoords(objBg);
 	gSPDrawObjRect(objCoords);
+
+	DebugMsg(DEBUG_NORMAL, "gSPBgRectCopy\n");
 }
 
 void gSPObjSprite(u32 _sp)
@@ -2369,6 +2420,8 @@ void gSPObjSprite(u32 _sp)
 	vtx3.t = lrt;
 
 	drawer.drawScreenSpaceTriangle(4);
+
+	DebugMsg(DEBUG_NORMAL, "gSPObjSprite\n");
 }
 
 static
@@ -2390,7 +2443,7 @@ void _loadSpriteImage(const uSprite *_pSprite)
 	{
 		FrameBuffer *pBuffer = frameBufferList().findBuffer(gSP.bgImage.address);
 		if (pBuffer != nullptr) {
-			gDP.tiles[0].frameBuffer = pBuffer;
+			gDP.tiles[0].frameBufferAddress = pBuffer->m_startAddress;
 			gDP.tiles[0].textureMode = TEXTUREMODE_FRAMEBUFFER_BG;
 			gDP.tiles[0].loadType = LOADTYPE_TILE;
 			gDP.changed |= CHANGED_TMEM;
@@ -2400,6 +2453,7 @@ void _loadSpriteImage(const uSprite *_pSprite)
 
 void gSPSprite2DBase(u32 _base)
 {
+	DebugMsg(DEBUG_NORMAL, "gSPSprite2DBase\n");
 	assert(RSP.nextCmd == 0xBE);
 	const u32 address = RSP_SegmentToPhysical( _base );
 	uSprite *pSprite = (uSprite*)&RDRAM[address];
@@ -2535,7 +2589,7 @@ void gSPObjLoadTxRectR(u32 txsp)
 
 void gSPObjMatrix( u32 mtx )
 {
-	u32 address = RSP_SegmentToPhysical( mtx );
+	u32 address = RSP_SegmentToPhysical(mtx);
 	uObjMtx *objMtx = (uObjMtx*)&RDRAM[address];
 
 	gSP.objMatrix.A = _FIXED2FLOAT( objMtx->A, 16 );
@@ -2546,6 +2600,8 @@ void gSPObjMatrix( u32 mtx )
 	gSP.objMatrix.Y = _FIXED2FLOAT( objMtx->Y, 2 );
 	gSP.objMatrix.baseScaleX = _FIXED2FLOAT( objMtx->BaseScaleX, 10 );
 	gSP.objMatrix.baseScaleY = _FIXED2FLOAT( objMtx->BaseScaleY, 10 );
+
+	DebugMsg(DEBUG_NORMAL, "gSPObjMatrix\n");
 }
 
 void gSPObjSubMatrix( u32 mtx )
@@ -2556,76 +2612,28 @@ void gSPObjSubMatrix( u32 mtx )
 	gSP.objMatrix.Y = _FIXED2FLOAT(objMtx->Y, 2);
 	gSP.objMatrix.baseScaleX = _FIXED2FLOAT(objMtx->BaseScaleX, 10);
 	gSP.objMatrix.baseScaleY = _FIXED2FLOAT(objMtx->BaseScaleY, 10);
+
+	DebugMsg(DEBUG_NORMAL, "gSPObjSubMatrix\n");
 }
 
 void gSPObjRendermode(u32 _mode)
 {
 	gSP.objRendermode = _mode;
+
+	DebugMsg(DEBUG_NORMAL, "gSPObjRendermode(0x%08x)\n", _mode);
 }
 
-#ifdef __NEON_OPT
-void gSPTransformVertex4NEON(u32 v, float mtx[4][4]);
-void gSPBillboardVertex4NEON(u32 v);
-void gSPTransformVertex_NEON(float vtx[4], float mtx[4][4]);
-void gSPLightVertex_NEON(SPVertex & _vtx);
-void gSPLightVertex4_NEON(u32 v);
+#ifndef __NEON_OPT
+void(*gSPInverseTransformVector)(float vec[3], float mtx[4][4]) = gSPInverseTransformVector_default;
+void(*gSPTransformVector)(float vtx[4], float mtx[4][4]) = gSPTransformVector_default;
+#else
+void gSPInverseTransformVector_NEON(float vec[3], float mtx[4][4]);
+void gSPTransformVector_NEON(float vtx[4], float mtx[4][4]);
+void(*gSPInverseTransformVector)(float vec[3], float mtx[4][4]) = gSPInverseTransformVector_NEON;
+void(*gSPTransformVector)(float vtx[4], float mtx[4][4]) = gSPTransformVector_NEON;
 #endif //__NEON_OPT
-
-#ifdef __VEC4_OPT
-#ifndef __NEON_OPT
-void (*gSPTransformVertex4)(u32 v, float mtx[4][4]) = gSPTransformVertex4_default;
-void (*gSPBillboardVertex4)(u32 v) = gSPBillboardVertex4_default;
-void (*gSPLightVertex4)(u32 v) = gSPLightVertex4_default;
-#else
-void (*gSPTransformVertex4)(u32 v, float mtx[4][4]) = gSPTransformVertex4NEON;
-void (*gSPBillboardVertex4)(u32 v) = gSPBillboardVertex4NEON;
-void (*gSPLightVertex4)(u32 v) = gSPLightVertex4_NEON;
-#endif
-
-void (*gSPPointLightVertex4)(u32 v, float _vPos[4][3]) = gSPPointLightVertex4_default;
-
-#endif
-
-
-#ifndef __NEON_OPT
-void (*gSPTransformVertex)(float vtx[4], float mtx[4][4]) =
-		gSPTransformVertex_default;
-void (*gSPLightVertex)(SPVertex & _vtx) = 
-		gSPLightVertex_default;
-#else
-void (*gSPTransformVertex)(float vtx[4], float mtx[4][4]) =
-		gSPTransformVertex_NEON;
-void (*gSPLightVertex)(SPVertex & _vtx) =
-		gSPLightVertex_NEON;
-#endif
-void (*gSPPointLightVertex)(SPVertex & _vtx, float * _vPos) = gSPPointLightVertex_default;
-void (*gSPBillboardVertex)(u32 v, u32 i) = gSPBillboardVertex_default;
 
 void gSPSetupFunctions()
 {
-	if (GBI.getMicrocodeType() != F3DEX2CBFD) {
-
-#ifdef __VEC4_OPT
-#ifndef __NEON_OPT
-		gSPLightVertex4 = gSPLightVertex4_default;
-#else
-		gSPLightVertex4 = gSPLightVertex4_NEON;
-#endif
-		gSPPointLightVertex4 = gSPPointLightVertex4_default;
-#endif
-
-#ifndef __NEON_OPT
-		gSPLightVertex = gSPLightVertex_default;
-#else
-		gSPLightVertex = gSPLightVertex_NEON;
-#endif
-		gSPPointLightVertex = gSPPointLightVertex_default;
-		return;
-	}
-#ifdef __VEC4_OPT
-		gSPLightVertex4 = gSPLightVertex4_CBFD;
-		gSPPointLightVertex4 = gSPPointLightVertex4_CBFD;
-#endif
-		gSPLightVertex = gSPLightVertex_CBFD;
-		gSPPointLightVertex = gSPPointLightVertex_CBFD;
+	g_ConkerUcode = GBI.getMicrocodeType() == F3DEX2CBFD;
 }

@@ -17,6 +17,11 @@ namespace glsl {
 		bool loadShadersStorage(graphics::Combiners & _combiners);
 
 	private:
+		bool _saveCombinerKeys(const graphics::Combiners & _combiners) const;
+		bool _loadFromCombinerKeys(graphics::Combiners & _combiners);
+
+		const u32 m_formatVersion = 0x17U;
+		const u32 m_keysFormatVersion = 0x03;
 		const opengl::GLInfo & m_glinfo;
 		opengl::CachedUseProgram * m_useProgram;
 	};

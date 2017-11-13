@@ -200,6 +200,10 @@ namespace graphics {
 
 		/*---------------Shaders-------------*/
 
+		bool isCombinerProgramBuilderObsolete();
+
+		void resetCombinerProgramBuilder();
+
 		CombinerProgram * createCombinerProgram(Combiner & _color, Combiner & _alpha, const CombinerKey & _key);
 
 		bool saveShadersStorage(const Combiners & _combiners);
@@ -207,8 +211,6 @@ namespace graphics {
 		bool loadShadersStorage(Combiners & _combiners);
 
 		ShaderProgram * createDepthFogShader();
-
-		ShaderProgram * createMonochromeShader();
 
 		TexrectDrawerShaderProgram * createTexrectDrawerDrawShader();
 
@@ -220,7 +222,7 @@ namespace graphics {
 
 		ShaderProgram * createOrientationCorrectionShader();
 
-		ShaderProgram * createTextDrawerShader();
+		TextDrawerShaderProgram * createTextDrawerShader();
 
 		void resetShaderProgram();
 

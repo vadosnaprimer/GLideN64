@@ -24,8 +24,6 @@ namespace glsl {
 
 		graphics::ShaderProgram * createShadowMapShader() const;
 
-		graphics::ShaderProgram * createMonochromeShader() const;
-
 		graphics::TexrectDrawerShaderProgram * createTexrectDrawerDrawShader() const;
 
 		graphics::ShaderProgram * createTexrectDrawerClearShader() const;
@@ -36,7 +34,7 @@ namespace glsl {
 
 		graphics::ShaderProgram * createOrientationCorrectionShader() const;
 
-		graphics::ShaderProgram * createTextDrawerShader() const;
+		graphics::TextDrawerShaderProgram * createTextDrawerShader() const;
 
 	private:
 		const opengl::GLInfo & m_glinfo;

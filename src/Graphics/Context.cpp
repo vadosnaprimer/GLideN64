@@ -199,6 +199,17 @@ ColorBufferReader * Context::createColorBufferReader(CachedTexture * _pTexture)
 
 /*---------------Shaders-------------*/
 
+bool Context::isCombinerProgramBuilderObsolete()
+{
+	return m_impl->isCombinerProgramBuilderObsolete();
+
+}
+
+void Context::resetCombinerProgramBuilder()
+{
+	m_impl->resetCombinerProgramBuilder();
+}
+
 CombinerProgram * Context::createCombinerProgram(Combiner & _color, Combiner & _alpha, const CombinerKey & _key)
 {
 	return m_impl->createCombinerProgram(_color, _alpha, _key);
@@ -217,11 +228,6 @@ bool Context::loadShadersStorage(Combiners & _combiners)
 ShaderProgram * Context::createDepthFogShader()
 {
 	return m_impl->createDepthFogShader();
-}
-
-ShaderProgram * Context::createMonochromeShader()
-{
-	return m_impl->createMonochromeShader();
 }
 
 TexrectDrawerShaderProgram * Context::createTexrectDrawerDrawShader()
@@ -249,7 +255,7 @@ ShaderProgram * Context::createOrientationCorrectionShader()
 	return m_impl->createOrientationCorrectionShader();
 }
 
-ShaderProgram * Context::createTextDrawerShader()
+TextDrawerShaderProgram * Context::createTextDrawerShader()
 {
 	return m_impl->createTextDrawerShader();
 }

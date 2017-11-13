@@ -6,26 +6,32 @@
 #include "Types.h"
 
 // Microcode Types
-#define F3D			0
-#define F3DEX		1
-#define F3DEX2		2
-#define L3D			3
-#define L3DEX		4
-#define L3DEX2		5
-#define S2DEX		6
-#define S2DEX2		7
-#define F3DPD		8
-#define F3DDKR		9
-#define F3DJFG		10
-#define F3DGOLDEN	11
-#define F3DBETA		12
-#define F3DEX2CBFD	13
-#define Turbo3D		14
-#define ZSortp		15
-#define F3DSETA		16
-#define F3DEX2MM	17
-#define F3DTEXA		18
-#define NONE		19
+#define F3D				0
+#define F3DEX			1
+#define F3DEX2			2
+#define L3D				3
+#define L3DEX			4
+#define L3DEX2			5
+#define S2DEX			6
+#define S2DEX2			7
+#define F3DPD			8
+#define F3DDKR			9
+#define F3DJFG			10
+#define F3DGOLDEN		11
+#define F3DBETA			12
+#define F3DEX2CBFD		13
+#define Turbo3D			14
+#define ZSortp			15
+#define F3DSETA			16
+#define F3DZEX2OOT		17
+#define F3DZEX2MM		18
+#define F3DTEXA			19
+#define T3DUX			20
+#define F3DEX2ACCLAIM	21
+#define F3DAM			22
+#define F3DSWRS			23
+#define F3DFLX2			24
+#define NONE			25
 
 // Fixed point conversion factors
 #define FIXED2FLOATRECIP1	0.5f
@@ -47,6 +53,13 @@
 
 #define _FIXED2FLOAT( v, b ) \
 	((f32)v * FIXED2FLOATRECIP##b)
+
+#define FIXED2FLOATRECIPCOLOR7	0.00787401572f
+#define FIXED2FLOATRECIPCOLOR8	0.00392156886f
+
+#define _FIXED2FLOATCOLOR( v, b ) \
+	((f32)v * FIXED2FLOATRECIPCOLOR##b)
+
 
 // Useful macros for decoding GBI command's parameters
 #define _SHIFTL( v, s, w )	\
@@ -79,6 +92,7 @@
 // These are all the constant flags
 #define G_ZBUFFER				0x00000001
 #define G_SHADE					0x00000004
+#define G_ACCLAIM_LIGHTING		0x00000080
 #define G_FOG					0x00010000
 #define G_LIGHTING				0x00020000
 #define G_TEXTURE_GEN			0x00040000
@@ -176,24 +190,6 @@
 #define G_MWO_POINT_XYSCREEN	0x18
 #define G_MWO_POINT_ZSCREEN		0x1C
 
-#ifdef DEBUG
-static const char *MWOPointText[] =
-{
-	"G_MWO_POINT_RGBA",
-	"G_MWO_POINT_ST",
-	"G_MWO_POINT_XYSCREEN",
-	"G_MWO_POINT_ZSCREEN"
-};
-
-static const char *MWOMatrixText[] =
-{
-	"G_MWO_MATRIX_XX_XY_I",	"G_MWO_MATRIX_XZ_XW_I",	"G_MWO_MATRIX_YX_YY_I",	"G_MWO_MATRIX_YZ_YW_I",
-	"G_MWO_MATRIX_ZX_ZY_I",	"G_MWO_MATRIX_ZZ_ZW_I",	"G_MWO_MATRIX_WX_WY_I",	"G_MWO_MATRIX_WZ_WW_I",
-	"G_MWO_MATRIX_XX_XY_F",	"G_MWO_MATRIX_XZ_XW_F",	"G_MWO_MATRIX_YX_YY_F",	"G_MWO_MATRIX_YZ_YW_F",
-	"G_MWO_MATRIX_ZX_ZY_F",	"G_MWO_MATRIX_ZZ_ZW_F",	"G_MWO_MATRIX_WX_WY_F",	"G_MWO_MATRIX_WZ_WW_F"
-};
-#endif
-
 // These flags change between ucodes
 extern u32 G_MTX_STACKSIZE;
 
@@ -238,36 +234,6 @@ extern u32 G_MWO_aLIGHT_8, G_MWO_bLIGHT_8;
 
 #define G_TX_MIRROR		0x1
 #define G_TX_CLAMP		0x2
-
-#ifdef DEBUG
-static const char *ImageFormatText[] =
-{
-	"G_IM_FMT_RGBA",
-	"G_IM_FMT_YUV",
-	"G_IM_FMT_CI",
-	"G_IM_FMT_IA",
-	"G_IM_FMT_I",
-	"G_IM_FMT_INVALID",
-	"G_IM_FMT_INVALID",
-	"G_IM_FMT_INVALID"
-};
-
-static const char *ImageSizeText[] =
-{
-	"G_IM_SIZ_4b",
-	"G_IM_SIZ_8b",
-	"G_IM_SIZ_16b",
-	"G_IM_SIZ_32b"
-};
-
-static const char *SegmentText[] =
-{
-	"G_MWO_SEGMENT_0", "G_MWO_SEGMENT_1", "G_MWO_SEGMENT_2", "G_MWO_SEGMENT_3",
-	"G_MWO_SEGMENT_4", "G_MWO_SEGMENT_5", "G_MWO_SEGMENT_6", "G_MWO_SEGMENT_7",
-	"G_MWO_SEGMENT_8", "G_MWO_SEGMENT_9", "G_MWO_SEGMENT_A", "G_MWO_SEGMENT_B",
-	"G_MWO_SEGMENT_C", "G_MWO_SEGMENT_D", "G_MWO_SEGMENT_E", "G_MWO_SEGMENT_F"
-};
-#endif
 
 #define G_NOOP					0x00
 
@@ -427,160 +393,10 @@ static const char *SegmentText[] =
 #define	G_SC_EVEN_INTERLACE		2
 #define	G_SC_ODD_INTERLACE		3
 
-#ifdef DEBUG
-static const char *AAEnableText = "AA_EN";
-static const char *DepthCompareText = "Z_CMP";
-static const char *DepthUpdateText = "Z_UPD";
-static const char *ClearOnCvgText = "CLR_ON_CVG";
-static const char *CvgXAlphaText = "CVG_X_ALPHA";
-static const char *AlphaCvgSelText = "ALPHA_CVG_SEL";
-static const char *ForceBlenderText = "FORCE_BL";
-
-static const char *AlphaCompareText[] =
-{
-	"G_AC_NONE", "G_AC_THRESHOLD", "G_AC_INVALID", "G_AC_DITHER"
-};
-
-static const char *DepthSourceText[] =
-{
-	"G_ZS_PIXEL", "G_ZS_PRIM"
-};
-
-static const char *AlphaDitherText[] =
-{
-	"G_AD_PATTERN", "G_AD_NOTPATTERN", "G_AD_NOISE", "G_AD_DISABLE"
-};
-
-static const char *ColorDitherText[] =
-{
-	"G_CD_MAGICSQ", "G_CD_BAYER", "G_CD_NOISE", "G_CD_DISABLE"
-};
-
-static const char *CombineKeyText[] =
-{
-	"G_CK_NONE", "G_CK_KEY"
-};
-
-static const char *TextureConvertText[] =
-{
-	"G_TC_CONV", "G_TC_INVALID", "G_TC_INVALID", "G_TC_INVALID", "G_TC_INVALID", "G_TC_FILTCONV", "G_TC_FILT", "G_TC_INVALID"
-};
-
-static const char *TextureFilterText[] =
-{
-	"G_TF_POINT", "G_TF_INVALID", "G_TF_BILERP", "G_TF_AVERAGE"
-};
-
-static const char *TextureLUTText[] =
-{
-	"G_TT_NONE", "G_TT_INVALID", "G_TT_RGBA16", "G_TT_IA16"
-};
-
-static const char *TextureLODText[] =
-{
-	"G_TL_TILE", "G_TL_LOD"
-};
-
-static const char *TextureDetailText[] =
-{
-	"G_TD_CLAMP", "G_TD_SHARPEN", "G_TD_DETAIL"
-};
-
-static const char *TexturePerspText[] =
-{
-	"G_TP_NONE", "G_TP_PERSP"
-};
-
-static const char *CycleTypeText[] =
-{
-	"G_CYC_1CYCLE", "G_CYC_2CYCLE", "G_CYC_COPY", "G_CYC_FILL"
-};
-
-static const char *PipelineModeText[] =
-{
-	"G_PM_NPRIMITIVE", "G_PM_1PRIMITIVE"
-};
-
-static const char *CvgDestText[] =
-{
-	"CVG_DST_CLAMP", "CVG_DST_WRAP", "CVG_DST_FULL", "CVG_DST_SAVE"
-};
-
-static const char *DepthModeText[] =
-{
-	"ZMODE_OPA", "ZMODE_INTER", "ZMODE_XLU", "ZMODE_DEC"
-};
-
-static const char *ScissorModeText[] =
-{
-	"G_SC_NON_INTERLACE", "G_SC_INVALID", "G_SC_EVEN_INTERLACE", "G_SC_ODD_INTERLACE"
-};
-#endif
-
-#ifdef DEBUG
-static const char *saRGBText[] =
-{
-	"COMBINED",			"TEXEL0",			"TEXEL1",			"PRIMITIVE",
-	"SHADE",			"ENVIRONMENT",		"NOISE",			"1",
-	"0",				"0",				"0",				"0",
-	"0",				"0",				"0",				"0"
-};
-
-static const char *sbRGBText[] =
-{
-	"COMBINED",			"TEXEL0",			"TEXEL1",			"PRIMITIVE",
-	"SHADE",			"ENVIRONMENT",		"CENTER",			"K4",
-	"0",				"0",				"0",				"0",
-	"0",				"0",				"0",				"0"
-};
-
-static const char *mRGBText[] =
-{
-	"COMBINED",			"TEXEL0",			"TEXEL1",			"PRIMITIVE",
-	"SHADE",			"ENVIRONMENT",		"SCALE",			"COMBINED_ALPHA",
-	"TEXEL0_ALPHA",		"TEXEL1_ALPHA",		"PRIMITIVE_ALPHA",	"SHADE_ALPHA",
-	"ENV_ALPHA",		"LOD_FRACTION",		"PRIM_LOD_FRAC",	"K5",
-	"0",				"0",				"0",				"0",
-	"0",				"0",				"0",				"0",
-	"0",				"0",				"0",				"0",
-	"0",				"0",				"0",				"0"
-};
-
-static const char *aRGBText[] =
-{
-	"COMBINED",			"TEXEL0",			"TEXEL1",			"PRIMITIVE",
-	"SHADE",			"ENVIRONMENT",		"1",				"0",
-};
-
-static const char *saAText[] =
-{
-	"COMBINED",			"TEXEL0",			"TEXEL1",			"PRIMITIVE",
-	"SHADE",			"ENVIRONMENT",		"1",				"0",
-};
-
-static const char *sbAText[] =
-{
-	"COMBINED",			"TEXEL0",			"TEXEL1",			"PRIMITIVE",
-	"SHADE",			"ENVIRONMENT",		"1",				"0",
-};
-
-static const char *mAText[] =
-{
-	"LOD_FRACTION",		"TEXEL0",			"TEXEL1",			"PRIMITIVE",
-	"SHADE",			"ENVIRONMENT",		"PRIM_LOD_FRAC",	"0",
-};
-
-static const char *aAText[] =
-{
-	"COMBINED",			"TEXEL0",			"TEXEL1",			"PRIMITIVE",
-	"SHADE",			"ENVIRONMENT",		"1",				"0",
-};
-#endif
-
 extern u32 G_RDPHALF_1, G_RDPHALF_2, G_RDPHALF_CONT;
 extern u32 G_SPNOOP;
 extern u32 G_SETOTHERMODE_H, G_SETOTHERMODE_L;
-extern u32 G_DL, G_ENDDL, G_CULLDL, G_BRANCH_Z;
+extern u32 G_DL, G_ENDDL, G_CULLDL, G_BRANCH_Z, G_BRANCH_W;
 extern u32 G_LOAD_UCODE;
 extern u32 G_MOVEMEM, G_MOVEWORD;
 extern u32 G_MTX, G_POPMTX;
@@ -657,6 +473,13 @@ typedef struct
 	s16		t2, s2;
 } DKRTriangle;
 
+typedef struct
+{
+	s16 y, x;
+	u16	flag;
+	s16 z;
+} SWVertex;
+
 struct Light
 {
 	u8 pad0, b, g, r;
@@ -672,6 +495,7 @@ struct SpecialMicrocodeInfo
 {
 	u32 type;
 	bool NoN;
+	bool negativeY;
 	u32 crc;
 	const char *text;
 };
@@ -683,8 +507,9 @@ struct MicrocodeInfo
 	u32 type;
 	u32 crc;
 	bool NoN;
-	bool textureGen;
+	bool negativeY;
 	bool texturePersp;
+	bool combineMatrices;
 };
 
 struct GBIInfo
@@ -698,9 +523,11 @@ struct GBIInfo
 	void loadMicrocode(u32 uc_start, u32 uc_dstart, u16 uc_dsize);
 	u32 getMicrocodeType() const {return m_pCurrent != nullptr ? m_pCurrent->type : NONE;}
 	bool isHWLSupported() const;
+	void setHWLSupported(bool _supported);
 	bool isNoN() const { return m_pCurrent != nullptr ? m_pCurrent->NoN : false; }
-	bool isTextureGen() const { return m_pCurrent != nullptr ? m_pCurrent->textureGen: true; }
+	bool isNegativeY() const { return m_pCurrent != nullptr ? m_pCurrent->negativeY : true; }
 	bool isTexturePersp() const { return m_pCurrent != nullptr ? m_pCurrent->texturePersp: true; }
+	bool isCombineMatrices() const { return m_pCurrent != nullptr ? m_pCurrent->combineMatrices: false; }
 
 private:
 	void _flushCommands();
@@ -708,6 +535,7 @@ private:
 	void _makeCurrent(MicrocodeInfo * _pCurrent);
 	bool _makeExistingMicrocodeCurrent(u32 uc_start, u32 uc_dstart, u32 uc_dsize);
 
+	bool m_hwlSupported;
 	MicrocodeInfo * m_pCurrent;
 
 	typedef std::list<MicrocodeInfo> Microcodes;

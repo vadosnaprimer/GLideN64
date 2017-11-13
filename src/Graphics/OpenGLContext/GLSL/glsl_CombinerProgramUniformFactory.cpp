@@ -201,9 +201,17 @@ public:
 				nFbMonochromeMode0 = 1;
 				if (gDP.otherMode.imageRead == 0)
 					nFbFixedAlpha0 = 1;
-			}
-			else if (gSP.textureTile[0]->size == G_IM_SIZ_16b && gSP.textureTile[0]->format == G_IM_FMT_IA)
+			} else if (gSP.textureTile[0]->size == G_IM_SIZ_16b && gSP.textureTile[0]->format == G_IM_FMT_IA) {
 				nFbMonochromeMode0 = 2;
+			} else if ((config.generalEmulation.hacks & hack_ZeldaMM) != 0 &&
+					   cache.current[0]->size == G_IM_SIZ_16b &&
+					   gSP.textureTile[0]->size == G_IM_SIZ_8b &&
+					   gSP.textureTile[0]->format == G_IM_FMT_CI) {
+				// Zelda monochrome effect
+				nFbMonochromeMode0 = 3;
+				nFbMonochromeMode1 = 3;
+			}
+
 			nMSTex0Enabled = cache.current[0]->frameBufferTexture == CachedTexture::fbMultiSample ? 1 : 0;
 		}
 		if (cache.current[1] != nullptr && cache.current[1]->frameBufferTexture != CachedTexture::fbNone) {
@@ -239,17 +247,21 @@ public:
 
 	void update(bool _force) override
 	{
-		if (RSP.bLLE) {
+		if (RSP.LLE) {
 			uFogUsage.set(0, _force);
 			return;
 		}
 
 		int nFogUsage = ((gSP.geometryMode & G_FOG) != 0) ? 1 : 0;
-		if (!GBI.isTextureGen())
-			// F-Zero ucode seems to always use fog mode when fog is used in blender.
-			nFogUsage |= (gDP.otherMode.c1_m1a == 3 || gDP.otherMode.c1_m2a == 3) ? 1 : 0;
+		if (GBI.getMicrocodeType() == F3DAM) {
+			const s16 fogMode = ((gSP.geometryMode >> 13) & 9) + 0xFFF8;
+			if (fogMode == 0)
+				nFogUsage = 1;
+			else if (fogMode > 0)
+				nFogUsage = 2;
+		}
 		uFogUsage.set(nFogUsage, _force);
-		uFogScale.set((float)gSP.fog.multiplier / 256.0f, (float)gSP.fog.offset / 256.0f, _force);
+		uFogScale.set(gSP.fog.multiplierf, gSP.fog.offsetf, _force);
 	}
 
 private:
@@ -272,8 +284,8 @@ public:
 			gDP.otherMode.c1_m2a,
 			gDP.otherMode.c1_m2b,
 			_force);
-		int forceBlend1 = gDP.otherMode.forceBlender;
 
+		const int forceBlend1 = (int)gDP.otherMode.forceBlender;
 		uForceBlendCycle1.set(forceBlend1, _force);
 	}
 
@@ -294,7 +306,11 @@ public:
 
 	void update(bool _force) override
 	{
-		int forceBlend1 = 1;
+		if ((gDP.otherMode.l & 0xFFFF0000) == 0x01500000) {
+			uForceBlendCycle1.set(0, _force);
+			uForceBlendCycle2.set(0, _force);
+			return;
+		}
 
 		uBlendMux1.set(gDP.otherMode.c1_m1a,
 			gDP.otherMode.c1_m1b,
@@ -302,17 +318,15 @@ public:
 			gDP.otherMode.c1_m2b,
 			_force);
 
-		int forceBlend2 = gDP.otherMode.forceBlender;
+		uBlendMux2.set(gDP.otherMode.c2_m1a,
+			gDP.otherMode.c2_m1b,
+			gDP.otherMode.c2_m2a,
+			gDP.otherMode.c2_m2b,
+			_force);
 
-		if (forceBlend2 != 0) {
-			uBlendMux2.set(gDP.otherMode.c2_m1a,
-				gDP.otherMode.c2_m1b,
-				gDP.otherMode.c2_m2a,
-				gDP.otherMode.c2_m2b,
-				_force);
-		}
-
+		const int forceBlend1 = 1;
 		uForceBlendCycle1.set(forceBlend1, _force);
+		const int forceBlend2 = gDP.otherMode.forceBlender;
 		uForceBlendCycle2.set(forceBlend2, _force);
 	}
 
@@ -428,7 +442,7 @@ public:
 
 	void update(bool _force) override
 	{
-		const u32 texturePersp = (RSP.bLLE || GBI.isTexturePersp()) ? gDP.otherMode.texturePersp : 1U;
+		const u32 texturePersp = (RSP.LLE || GBI.isTexturePersp()) ? gDP.otherMode.texturePersp : 1U;
 		uTexturePersp.set(texturePersp, _force);
 	}
 
@@ -436,20 +450,36 @@ private:
 	iUniform uTexturePersp;
 };
 
-class UTextureFilterMode : public UniformGroup
+class UTextureFetchMode : public UniformGroup
 {
 public:
-	UTextureFilterMode(GLuint _program) {
+	UTextureFetchMode(GLuint _program) {
 		LocateUniform(uTextureFilterMode);
+		LocateUniform(uTextureFormat);
+		LocateUniform(uBiLerp);
+		LocateUniform(uTextureConvert);
+		LocateUniform(uConvertParams);
 	}
 
 	void update(bool _force) override
 	{
-		uTextureFilterMode.set(gDP.otherMode.textureFilter | (gSP.objRendermode&G_OBJRM_BILERP), _force);
+		int textureFilter = gDP.otherMode.textureFilter;
+		if ((gSP.objRendermode&G_OBJRM_BILERP) != 0)
+			textureFilter |= 2;
+		uTextureFilterMode.set(textureFilter, _force);
+		uBiLerp.set(gDP.otherMode.bi_lerp0, gDP.otherMode.bi_lerp1, _force);
+		uTextureFormat.set(gSP.textureTile[0]->format, gSP.textureTile[1]->format, _force);
+		uTextureConvert.set(0, gDP.otherMode.convert_one, _force);
+		if (gDP.otherMode.bi_lerp0 == 0 || gDP.otherMode.bi_lerp1 == 0)
+			uConvertParams.set(gDP.convert.k0, gDP.convert.k1, gDP.convert.k2, gDP.convert.k3, _force);
 	}
 
 private:
 	iUniform uTextureFilterMode;
+	iv2Uniform uTextureFormat;
+	iv2Uniform uBiLerp;
+	iv2Uniform uTextureConvert;
+	i4Uniform uConvertParams;
 };
 
 class UAlphaTestInfo : public UniformGroup
@@ -505,7 +535,7 @@ public:
 
 	void update(bool _force) override
 	{
-		if (RSP.bLLE)
+		if (RSP.LLE)
 			uDepthScale.set(0.5f, 0.5f, _force);
 		else
 			uDepthScale.set(gSP.viewport.vscale[2], gSP.viewport.vtrans[2], _force);
@@ -524,6 +554,7 @@ public:
 		LocateUniform(uEnableDepthUpdate);
 		LocateUniform(uDepthMode);
 		LocateUniform(uDepthSource);
+		LocateUniform(uPrimDepth);
 		LocateUniform(uDeltaZ);
 	}
 
@@ -545,8 +576,10 @@ public:
 		}
 		uDepthMode.set(gDP.otherMode.depthMode, _force);
 		uDepthSource.set(gDP.otherMode.depthSource, _force);
-		if (gDP.otherMode.depthSource == G_ZS_PRIM)
+		if (gDP.otherMode.depthSource == G_ZS_PRIM) {
 			uDeltaZ.set(gDP.primDepth.deltaZ, _force);
+			uPrimDepth.set((gDP.primDepth.z + 1.0f) * 0.5f, _force);
+		}
 	}
 
 private:
@@ -555,7 +588,28 @@ private:
 	iUniform uEnableDepthUpdate;
 	iUniform uDepthMode;
 	iUniform uDepthSource;
+	fUniform uPrimDepth;
 	fUniform uDeltaZ;
+};
+
+class UDepthSource : public UniformGroup
+{
+public:
+	UDepthSource(GLuint _program) {
+		LocateUniform(uDepthSource);
+		LocateUniform(uPrimDepth);
+	}
+
+	void update(bool _force) override
+	{
+		uDepthSource.set(gDP.otherMode.depthSource, _force);
+		if (gDP.otherMode.depthSource == G_ZS_PRIM)
+			uPrimDepth.set((gDP.primDepth.z + 1.0f) * 0.5f, _force);
+	}
+
+private:
+	iUniform uDepthSource;
+	fUniform uPrimDepth;
 };
 
 class URenderTarget : public UniformGroup
@@ -705,24 +759,28 @@ public:
 			if (!m_useTile[t])
 				continue;
 
-			if (gSP.textureTile[t] != NULL) {
+			if (gSP.textureTile[t] != nullptr) {
 				if (gSP.textureTile[t]->textureMode == TEXTUREMODE_BGIMAGE || gSP.textureTile[t]->textureMode == TEXTUREMODE_FRAMEBUFFER_BG)
 					uTexOffset[t].set(0.0f, 0.0f, _force);
 				else {
 					float fuls = gSP.textureTile[t]->fuls;
 					float fult = gSP.textureTile[t]->fult;
-					FrameBuffer * pBuffer = gSP.textureTile[t]->frameBuffer;
-					if (pBuffer != NULL) {
-						if (gSP.textureTile[t]->masks > 0 && gSP.textureTile[t]->clamps == 0)
-							fuls = float(gSP.textureTile[t]->uls % (1 << gSP.textureTile[t]->masks));
-						if (gSP.textureTile[t]->maskt > 0 && gSP.textureTile[t]->clampt == 0)
-							fult = float(gSP.textureTile[t]->ult % (1 << gSP.textureTile[t]->maskt));
+					if (gSP.textureTile[t]->frameBufferAddress > 0) {
+						FrameBuffer * pBuffer = frameBufferList().getBuffer(gSP.textureTile[t]->frameBufferAddress);
+						if (pBuffer != nullptr) {
+							if (gSP.textureTile[t]->masks > 0 && gSP.textureTile[t]->clamps == 0)
+								fuls = float(gSP.textureTile[t]->uls % (1 << gSP.textureTile[t]->masks));
+							if (gSP.textureTile[t]->maskt > 0 && gSP.textureTile[t]->clampt == 0)
+								fult = float(gSP.textureTile[t]->ult % (1 << gSP.textureTile[t]->maskt));
+						} else {
+							gSP.textureTile[t]->frameBufferAddress = 0;
+						}
 					}
 					uTexOffset[t].set(fuls, fult, _force);
 				}
 			}
 
-			if (cache.current[t] != NULL) {
+			if (cache.current[t] != nullptr) {
 				f32 shiftScaleS = 1.0f;
 				f32 shiftScaleT = 1.0f;
 				getTextureShiftScale(t, cache, shiftScaleS, shiftScaleT);
@@ -765,7 +823,7 @@ public:
 	void update(bool _force) override
 	{
 		for (s32 i = 0; i <= gSP.numLights; ++i) {
-			uLightDirection[i].set(gSP.lights.i_xyz[i], _force);
+			uLightDirection[i].set(gSP.lights.xyz[i], _force);
 			uLightColor[i].set(gSP.lights.rgb[i], _force);
 		}
 	}
@@ -803,6 +861,8 @@ void CombinerProgramUniformFactory::buildUniforms(GLuint _program,
 			_uniforms.emplace_back(new UMipmap1(_program));
 			if (config.generalEmulation.enableLOD != 0)
 				_uniforms.emplace_back(new UMipmap2(_program));
+		} else if (_key.getCycleType() < G_CYC_COPY) {
+			_uniforms.emplace_back(new UTextureFetchMode(_program));
 		}
 
 		_uniforms.emplace_back(new UTexturePersp(_program));
@@ -831,13 +891,12 @@ void CombinerProgramUniformFactory::buildUniforms(GLuint _program,
 
 	_uniforms.emplace_back(new UScreenScale(_program));
 
-	if (config.texture.bilinearMode == BILINEAR_3POINT)
-		_uniforms.emplace_back(new UTextureFilterMode(_program));
-
 	_uniforms.emplace_back(new UAlphaTestInfo(_program));
 
 	if (config.frameBufferEmulation.N64DepthCompare != 0)
 		_uniforms.emplace_back(new UDepthInfo(_program));
+	else
+		_uniforms.emplace_back(new UDepthSource(_program));
 
 	if (config.generalEmulation.enableFragmentDepthWrite != 0 ||
 		config.frameBufferEmulation.N64DepthCompare != 0)

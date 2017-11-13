@@ -1,5 +1,8 @@
+#ifdef MINGW
+#define _CRT_RAND_S
+#endif
+
 #include <thread>
-#include <array>
 #include <algorithm>
 #include <random>
 #include <functional>
@@ -13,6 +16,7 @@
 #include "Textures.h"
 #include "NoiseTexture.h"
 #include "DisplayWindow.h"
+#include "DisplayLoadProgress.h"
 
 using namespace graphics;
 
@@ -26,7 +30,16 @@ NoiseTexture::NoiseTexture()
 {
 }
 
-typedef std::array<std::vector<u8>, NOISE_TEX_NUM> NoiseTexturesData;
+static
+u32 Rand(u32 rand_value)
+{
+#ifdef MINGW
+	rand_s(&rand_value);
+#else
+	rand_value = rand();
+#endif
+	return rand_value;
+}
 
 static
 void FillTextureData(u32 _seed, NoiseTexturesData * _pData, u32 _start, u32 _stop)
@@ -35,18 +48,20 @@ void FillTextureData(u32 _seed, NoiseTexturesData * _pData, u32 _start, u32 _sto
 	for (u32 i = _start; i < _stop; ++i) {
 		auto & vec = _pData->at(i);
 		const size_t sz = vec.size();
-		for (size_t t = 0; t < sz; ++t)
-			vec[t] = rand() & 0xFF;
+		u32 rand_value(0U);
+		for (size_t t = 0; t < sz; ++t) {
+			rand_value = Rand(rand_value);
+			vec[t] = rand_value & 0xFF;
+		}
 	}
 }
 
-void NoiseTexture::init()
-{
-	if (config.generalEmulation.enableNoise == 0)
-		return;
 
-	NoiseTexturesData texData;
-	for (auto& vec : texData)
+void NoiseTexture::_fillTextureData()
+{
+	displayLoadProgress(L"INIT NOISE TEXTURES. PLEASE WAIT...");
+
+	for (auto& vec : m_texData)
 		vec.resize(NOISE_TEX_WIDTH * NOISE_TEX_HEIGHT);
 
 	const u32 concurentThreadsSupported = std::thread::hardware_concurrency();
@@ -67,19 +82,31 @@ void NoiseTexture::init()
 			threads.emplace_back(
 				FillTextureData,
 				generator(),
-				&texData,
+				&m_texData,
 				start,
-				std::min(start + chunk, static_cast<u32>(texData.size())));
+				std::min(start + chunk, static_cast<u32>(m_texData.size())));
 			start += chunk;
 		} while (start < NOISE_TEX_NUM - chunk);
 
-		FillTextureData(generator(), &texData, start, texData.size());
+		FillTextureData(generator(), &m_texData, start, m_texData.size());
 
 		for (auto& t : threads)
 			t.join();
 	} else {
-		FillTextureData(static_cast<u32>(time(nullptr)), &texData, 0, texData.size());
+		FillTextureData(static_cast<u32>(time(nullptr)), &m_texData, 0, m_texData.size());
 	}
+
+	displayLoadProgress(L"");
+}
+
+
+void NoiseTexture::init()
+{
+	if (config.generalEmulation.enableNoise == 0)
+		return;
+
+	if (m_texData[0].empty())
+		_fillTextureData();
 
 	for (u32 i = 0; i < NOISE_TEX_NUM; ++i) {
 		m_pTexture[i] = textureCache().addFrameBufferTexture(false);
@@ -124,7 +151,7 @@ void NoiseTexture::init()
 			params.height = m_pTexture[i]->realHeight;
 			params.format = fbTexFormats.noiseFormat;
 			params.dataType = fbTexFormats.noiseType;
-			params.data = texData[i].data();
+			params.data = m_texData[i].data();
 			gfxContext.update2DTexture(params);
 		}
 	}
@@ -143,8 +170,11 @@ void NoiseTexture::update()
 	if (m_DList == dwnd().getBuffersSwapCount() || config.generalEmulation.enableNoise == 0)
 		return;
 
-	while (m_currTex == m_prevTex)
-		m_currTex = rand() % NOISE_TEX_NUM;
+	u32 rand_value(0U);
+	while (m_currTex == m_prevTex) {
+		rand_value = Rand(rand_value);
+		m_currTex = rand_value % NOISE_TEX_NUM;
+	}
 	m_prevTex = m_currTex;
 	if (m_pTexture[m_currTex] == nullptr)
 		return;

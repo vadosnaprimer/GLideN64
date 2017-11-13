@@ -6,6 +6,7 @@
 #include "RSP.h"
 #include "PluginAPI.h"
 #include "Config.h"
+#include "GBI.h"
 #include "wst.h"
 
 void Config::resetToDefaults()
@@ -28,7 +29,6 @@ void Config::resetToDefaults()
 
 	texture.maxAnisotropy = 0;
 	texture.bilinearMode = BILINEAR_STANDARD;
-	texture.maxBytes = 500 * gc_uMegabyte;
 	texture.screenShotFormat = 0;
 
 	generalEmulation.enableLOD = 1;
@@ -102,12 +102,6 @@ void Config::resetToDefaults()
 	for (int i = 0; i < 4; ++i)
 		font.colorf[i] = font.color[i] / 255.0f;
 
-	bloomFilter.enable = 0;
-	bloomFilter.thresholdLevel = 4;
-	bloomFilter.blendMode = 0;
-	bloomFilter.blurAmount = 10;
-	bloomFilter.blurStrength = 20;
-
 	gammaCorrection.force = 0;
 	gammaCorrection.level = 2.0f;
 
@@ -115,4 +109,13 @@ void Config::resetToDefaults()
 	onScreenDisplay.fps = 0;
 	onScreenDisplay.percent = 0;
 	onScreenDisplay.pos = posBottomLeft;
+
+	debug.dumpMode = 0;
+}
+
+bool isHWLightingAllowed()
+{
+	if (config.generalEmulation.enableHWLighting == 0)
+		return false;
+	return GBI.isHWLSupported();
 }

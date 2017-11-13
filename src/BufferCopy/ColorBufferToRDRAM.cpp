@@ -65,6 +65,7 @@ void ColorBufferToRDRAM::_initFBTexture(void)
 
 	m_pTexture = textureCache().addFrameBufferTexture(false);
 	m_pTexture->format = G_IM_FMT_RGBA;
+	m_pTexture->size = 2;
 	m_pTexture->clampS = 1;
 	m_pTexture->clampT = 1;
 	m_pTexture->frameBufferTexture = CachedTexture::fbOneSample;
@@ -152,7 +153,7 @@ bool ColorBufferToRDRAM::_prepareCopy(u32 _startAddress)
 
 	if(m_pTexture == nullptr ||
 		m_pTexture->realWidth != _getRealWidth(pBuffer->m_width) ||
-		m_pTexture->realHeight != VI_GetMaxBufferHeight(m_lastBufferWidth))
+		m_pTexture->realHeight != VI_GetMaxBufferHeight(_getRealWidth(pBuffer->m_width)))
 	{
 		_destroyFBTexure();
 
@@ -309,7 +310,8 @@ void ColorBufferToRDRAM::copyChunkToRDRAM(u32 _address)
 {
 	if (!_prepareCopy(_address))
 		return;
-	_copy(_address, _address + 0x1000, true);
+	const u32 addr = _address & ~0xfff;
+	_copy(addr, addr + 0x1000, true);
 }
 
 

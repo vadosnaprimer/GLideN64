@@ -1,7 +1,39 @@
 #include <windows.h>
 #include <QObject>
+#include <stdio.h>
 #include "FullscreenResolutions.h"
 #include "../Config.h"
+
+#if defined(_MSC_VER) && _MSC_VER < 1900
+
+#define snprintf c99_snprintf
+#define vsnprintf c99_vsnprintf
+
+__inline int c99_vsnprintf(char *outBuf, size_t size, const char *format, va_list ap)
+{
+	int count = -1;
+
+	if (size != 0)
+		count = _vsnprintf_s(outBuf, size, _TRUNCATE, format, ap);
+	if (count == -1)
+		count = _vscprintf(format, ap);
+
+	return count;
+}
+
+__inline int c99_snprintf(char *outBuf, size_t size, const char *format, ...)
+{
+	int count;
+	va_list ap;
+
+	va_start(ap, format);
+	count = c99_vsnprintf(outBuf, size, format, ap);
+	va_end(ap);
+
+	return count;
+}
+
+#endif
 
 static
 struct
@@ -104,12 +136,12 @@ void fillFullscreenResolutionsList(QStringList & _listResolutions, int & _resolu
 
 			fullscreen.resolution[fullscreen.numResolutions].width = deviceMode.dmPelsWidth;
 			fullscreen.resolution[fullscreen.numResolutions].height = deviceMode.dmPelsHeight;
-			sprintf(text, "%i x %i", deviceMode.dmPelsWidth, deviceMode.dmPelsHeight);
+			snprintf(text, 128, "%i x %i", deviceMode.dmPelsWidth, deviceMode.dmPelsHeight);
 
 			for (int j = 0; j < numRatios; ++j)
 				if (fabs((float)deviceMode.dmPelsWidth / (float)deviceMode.dmPelsHeight
 					- (float)ratios[j].x / (float)ratios[j].y) < 0.005f) {
-					sprintf(text, "%s (%s)", text, ratios[j].description);
+					snprintf(text, 128, "%s (%s)", text, ratios[j].description);
 					break;
 				}
 

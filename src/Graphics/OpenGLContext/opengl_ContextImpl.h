@@ -98,6 +98,10 @@ namespace opengl {
 
 		/*---------------Shaders-------------*/
 
+		bool isCombinerProgramBuilderObsolete() override;
+
+		void resetCombinerProgramBuilder() override;
+
 		graphics::CombinerProgram * createCombinerProgram(Combiner & _color, Combiner & _alpha, const CombinerKey & _key) override;
 
 		bool saveShadersStorage(const graphics::Combiners & _combiners) override;
@@ -105,8 +109,6 @@ namespace opengl {
 		bool loadShadersStorage(graphics::Combiners & _combiners) override;
 
 		graphics::ShaderProgram * createDepthFogShader() override;
-
-		graphics::ShaderProgram * createMonochromeShader() override;
 
 		graphics::TexrectDrawerShaderProgram * createTexrectDrawerDrawShader() override;
 
@@ -118,7 +120,7 @@ namespace opengl {
 
 		graphics::ShaderProgram * createOrientationCorrectionShader() override;
 
-		graphics::ShaderProgram * createTextDrawerShader() override;
+		graphics::TextDrawerShaderProgram * createTextDrawerShader() override;
 
 		void resetShaderProgram() override;
 

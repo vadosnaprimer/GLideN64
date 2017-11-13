@@ -99,7 +99,7 @@ struct gSPInfo
 
 	gDPTile *textureTile[2];
 
-	struct
+	struct Viewport
 	{
 		f32 vscale[4];
 		f32 vtrans[4];
@@ -110,6 +110,7 @@ struct gSPInfo
 	struct
 	{
 		s16 multiplier, offset;
+		f32 multiplierf, offsetf;
 	} fog;
 
 	struct
@@ -133,9 +134,14 @@ struct gSPInfo
 		u32 vtx, mtx, tex_offset, tex_shift, tex_count;
 	} DMAOffsets;
 
+	u32 DMAIO_address;
+
 	// CBFD
 	u32 vertexNormalBase;
 	f32 vertexCoordMod[16];
+
+	u32 textureCoordScaleOrg;
+	u32 textureCoordScale[2];
 };
 
 extern gSPInfo gSP;
@@ -149,13 +155,17 @@ void gSPForceMatrix( u32 mptr );
 void gSPLight( u32 l, s32 n );
 void gSPLightCBFD( u32 l, s32 n );
 void gSPLookAt( u32 l, u32 n );
+void gSPLightAcclaim(u32 l, s32 n);
 void gSPVertex( u32 v, u32 n, u32 v0 );
 void gSPCIVertex( u32 v, u32 n, u32 v0 );
 void gSPDMAVertex( u32 v, u32 n, u32 v0 );
 void gSPCBFDVertex( u32 v, u32 n, u32 v0 );
-void gSPDisplayList( u32 dl );
+void gSPT3DUXVertex(u32 v, u32 n, u32 ci);
+void gSPF3DAMVertex( u32 v, u32 n, u32 v0 );
+void gSPSWVertex(const SWVertex * vertex, u32 n, u32 v0);
+void gSPDisplayList(u32 dl);
 void gSPBranchList( u32 dl );
-void gSPBranchLessZ( u32 branchdl, u32 vtx, u32 zval );
+void gSPBranchLessZ(u32 branchdl, u32 vtx, u32 zval);
 void gSPBranchLessW( u32 branchdl, u32 vtx, u32 wval );
 void gSPDlistCount(u32 count, u32 v);
 void gSPSprite2DBase(u32 _base );
@@ -200,8 +210,7 @@ void gSPSetVertexColorBase( u32 base );
 void gSPSetVertexNormaleBase( u32 base );
 void gSPProcessVertex(u32 v);
 void gSPCoordMod(u32 _w0, u32 _w1);
-
-void gSPTriangleUnknown();
+void gSPCombineMatrices(u32 _mode);
 
 void gSPTriangle(s32 v0, s32 v1, s32 v2);
 void gSP1Triangle(s32 v0, s32 v1, s32 v2);
@@ -212,17 +221,10 @@ void gSP4Triangles(const s32 v00, const s32 v01, const s32 v02,
 					const s32 v20, const s32 v21, const s32 v22,
 					const s32 v30, const s32 v31, const s32 v32 );
 
-#ifdef __VEC4_OPT
-extern void (*gSPTransformVertex4)(u32 v, float mtx[4][4]);
-extern void (*gSPTransformNormal4)(u32 v, float mtx[4][4]);
-extern void (*gSPLightVertex4)(u32 v);
-extern void (*gSPPointLightVertex4)(u32 v, float _vPos[4][3]);
-extern void (*gSPBillboardVertex4)(u32 v);
-#endif
-extern void (*gSPTransformVertex)(float vtx[4], float mtx[4][4]);
-extern void (*gSPLightVertex)(SPVertex & _vtx);
-extern void (*gSPPointLightVertex)(SPVertex & _vtx, float * _vPos);
-extern void (*gSPBillboardVertex)(u32 v, u32 i);
+void gSPLightVertex(SPVertex & _vtx);
+
+extern void (*gSPTransformVector)(float vtx[4], float mtx[4][4]);
+extern void (*gSPInverseTransformVector)(float vec[3], float mtx[4][4]);
 void gSPSetupFunctions();
 void gSPFlushTriangles();
 #endif
